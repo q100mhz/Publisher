@@ -18,7 +18,6 @@ services:
   app:
     build:
       context: .
-      network: host  # сборка ходит в интернет напрямую через сеть сервера, без моста Docker
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     restart: unless-stopped
@@ -36,6 +35,13 @@ services:
     depends_on:
       db:
         condition: service_healthy
+
+networks:
+  default:
+    driver_opts:
+      # MTU сети контейнеров. На некоторых VPS сеть сервера меньше стандартных 1500 —
+      # тогда HTTPS из контейнеров «зависает». Значение задаётся в .env (DOCKER_MTU)
+      com.docker.network.driver.mtu: ${DOCKER_MTU:-1500}
 
 volumes:
   pgdata:

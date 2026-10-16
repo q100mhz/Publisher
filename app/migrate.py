@@ -5,7 +5,7 @@
 
 Переход к многопользовательскому режиму:
   * в таблицы добавляется владелец (user_id);
-  * всё, что было создано раньше, закрепляется за первым администратором (или первым пользователем);
+  * всё, что было создано раньше, закрепляется за первым пользователем (владельцем сервера);
   * общие настройки (рубильник, модель DeepSeek) переносятся в его личные настройки.
 """
 from sqlalchemy import inspect, text
@@ -13,13 +13,16 @@ from sqlalchemy import inspect, text
 from .db import engine
 
 NEW_COLUMNS = [
-    ("users", "is_admin", "BOOLEAN NOT NULL DEFAULT FALSE"),
     ("users", "is_active", "BOOLEAN NOT NULL DEFAULT TRUE"),
     ("sources", "user_id", "INTEGER"),
     ("news", "user_id", "INTEGER"),
     ("news", "source_label", "VARCHAR(200)"),
     ("prompts", "user_id", "INTEGER"),
     ("parser_runs", "user_id", "INTEGER"),
+    ("prompts", "kind", "VARCHAR(20) NOT NULL DEFAULT 'text'"),
+    ("news_images", "kind", "VARCHAR(20) NOT NULL DEFAULT 'original'"),
+    ("news", "img_state", "VARCHAR(20) NOT NULL DEFAULT 'idle'"),
+    ("news", "img_error", "TEXT NOT NULL DEFAULT ''"),
 ]
 OWNED_TABLES = ["sources", "news", "prompts", "parser_runs"]
 # Старый общий ключ настройки → личный ключ
@@ -42,14 +45,9 @@ def run() -> None:
         for table in OWNED_TABLES:
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_user_id ON {table} (user_id)"))
 
-        owner = conn.execute(text(
-            "SELECT id FROM users ORDER BY is_admin DESC, id LIMIT 1")).scalar()
+        owner = conn.execute(text("SELECT id FROM users ORDER BY id LIMIT 1")).scalar()
         if owner is None:
             return  # пользователей ещё нет — значит, и данных без владельца нет
-
-        if not conn.execute(text("SELECT 1 FROM users WHERE is_admin = :t LIMIT 1"), {"t": True}).scalar():
-            conn.execute(text("UPDATE users SET is_admin = :t WHERE id = :id"), {"t": True, "id": owner})
-            print(f"[migrate] пользователь #{owner} назначен администратором")
 
         for table in OWNED_TABLES:
             moved = conn.execute(text(f"UPDATE {table} SET user_id = :o WHERE user_id IS NULL"), {"o": owner}).rowcount

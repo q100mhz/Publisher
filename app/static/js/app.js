@@ -245,6 +245,47 @@
     if (!$("[data-gen-running]").classList.contains("hidden")) pollGeneration();
   }
 
+  // Генерация картинки
+  const imgBtn = $("[data-generate-image]");
+  function pollImage() {
+    const running = $("[data-img-running]");
+    const errBox = $("[data-img-error]");
+    running.classList.remove("hidden");
+    errBox.classList.add("hidden");
+    imgBtn.disabled = true;
+    const timer = setInterval(async () => {
+      try {
+        const st = await getJSON(imgBtn.dataset.stateUrl);
+        if (st.state === "running") return;
+        clearInterval(timer);
+        if (st.state === "error") {
+          running.classList.add("hidden");
+          errBox.textContent = st.error || "Ошибка генерации картинки";
+          errBox.classList.remove("hidden");
+          imgBtn.disabled = false;
+        } else {
+          dirty = false;
+          location.hash = "images";
+          location.reload();
+        }
+      } catch (_) { /* временная ошибка сети — пробуем ещё */ }
+    }, 3000);
+  }
+  if (imgBtn) {
+    imgBtn.addEventListener("click", async () => {
+      if (dirty && !confirm("В карточке есть несохранённые изменения. После создания картинки страница обновится и они пропадут. Продолжить?")) return;
+      imgBtn.disabled = true;
+      try {
+        await post(imgBtn.dataset.url, { prompt_id: $("[data-img-prompt]").value });
+        pollImage();
+      } catch (err) {
+        imgBtn.disabled = false;
+        toast(err.message, "warn");
+      }
+    });
+    if (!$("[data-img-running]").classList.contains("hidden")) pollImage();
+  }
+
   // Картинки: drag & drop
   $$("[data-dropzone]").forEach((zone) => {
     const input = $("input[type=file]", zone);
@@ -343,6 +384,19 @@
       syncProvider();
     });
     syncProvider();
+  }
+
+  const imgProvider = $("[data-img-provider]");
+  if (imgProvider) {
+    const syncImg = () => {
+      const opt = imgProvider.selectedOptions[0];
+      const models = opt.dataset.models ? opt.dataset.models.split("|") : [];
+      $("[data-img-model-list]").innerHTML = models.map((m) => `<option value="${m}">`).join("");
+      $("[data-img-base-url]").classList.toggle("hidden", imgProvider.value !== "custom");
+      $("[data-img-key]").classList.toggle("hidden", imgProvider.value === "");
+    };
+    imgProvider.addEventListener("change", syncImg);
+    syncImg();
   }
 
   const aiTest = $("[data-ai-test]");

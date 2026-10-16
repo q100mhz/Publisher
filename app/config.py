@@ -16,15 +16,10 @@ DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./data/publisher.db")
 SECRET_KEY = os.getenv("SECRET_KEY", "dev-secret-change-me")
 COOKIE_SECURE = _bool("COOKIE_SECURE", False)
 
-# Учётная запись создаётся при первом запуске, если пользователей в базе ещё нет
-ADMIN_LOGIN = os.getenv("ADMIN_LOGIN", "")
-ADMIN_PASSWORD = os.getenv("ADMIN_PASSWORD", "")
-
 MEDIA_DIR = Path(os.getenv("MEDIA_DIR", "./data/media")).resolve()
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
-# DeepSeek (OpenAI-совместимый API)
-DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
+# DeepSeek: адрес и модель по умолчанию. Ключи у каждого пользователя свои — в «Настройках» сайта
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
 

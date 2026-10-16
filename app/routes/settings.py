@@ -1,15 +1,18 @@
-"""Справочник промптов, личные настройки и управление пользователями (для администратора)."""
+"""Справочник промптов и личные настройки пользователя.
+
+Пользователей на сайте завести нельзя — только из терминала сервера (python -m app.cli).
+"""
 import re
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
-from sqlalchemy import func, select, update
+from sqlalchemy import select, update
 from sqlalchemy.orm import Session
 
-from ..auth import create_user, hash_password, require_admin, require_user, verify_password
+from ..auth import hash_password, require_user, verify_password
 from ..crypto import encrypt
 from ..db import get_db
-from ..models import News, Prompt, Source, User, get_setting, set_setting
+from ..models import Prompt, User, get_setting, set_setting
 from ..services import ai, generator
 from ..web import flash, redirect, render
 
@@ -26,19 +29,24 @@ def _own_prompt(db: Session, prompt_id: int, user_id: int) -> Prompt:
     return prompt
 
 
+PROMPT_KINDS = {"text": "Для статьи", "image": "Для картинки"}
+
+
 @router.get("/prompts")
-def prompts_page(request: Request, edit: int | None = None, user_id: int = Depends(require_user),
+def prompts_page(request: Request, edit: int | None = None, kind: str = "text", user_id: int = Depends(require_user),
                  db: Session = Depends(get_db)):
     prompts = db.scalars(select(Prompt).where(Prompt.user_id == user_id)
                          .order_by(Prompt.is_default.desc(), Prompt.name)).all()
     current = _own_prompt(db, edit, user_id) if edit else None
-    return render(request, "prompts.html", active="prompts", prompts=prompts, current=current,
-                  placeholders=generator.PLACEHOLDERS)
+    kind = current.kind if current else (kind if kind in PROMPT_KINDS else "text")
+    placeholders = generator.IMAGE_PLACEHOLDERS if kind == "image" else generator.PLACEHOLDERS
+    return render(request, "prompts.html", active="prompts", prompts=prompts, current=current, kind=kind,
+                  kinds=PROMPT_KINDS, placeholders=placeholders)
 
 
 @router.post("/prompts")
 def save_prompt(request: Request, prompt_id: str = Form(""), name: str = Form(...), text: str = Form(...),
-                user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+                kind: str = Form("text"), user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     if not text.strip():
         flash(request, "Текст промпта не может быть пустым", "warn")
         return redirect("/prompts")
@@ -46,8 +54,10 @@ def save_prompt(request: Request, prompt_id: str = Form(""), name: str = Form(..
         prompt = _own_prompt(db, int(prompt_id), user_id)
         prompt.name, prompt.text = name.strip() or prompt.name, text
     else:
-        has_any = db.scalar(select(Prompt.id).where(Prompt.user_id == user_id).limit(1)) is not None
-        prompt = Prompt(user_id=user_id, name=name.strip() or "Новый промпт", text=text, is_default=not has_any)
+        kind = kind if kind in PROMPT_KINDS else "text"
+        has_any = db.scalar(select(Prompt.id).where(Prompt.user_id == user_id, Prompt.kind == kind).limit(1)) is not None
+        prompt = Prompt(user_id=user_id, kind=kind, name=name.strip() or "Новый промпт", text=text,
+                        is_default=not has_any)
         db.add(prompt)
     db.commit()
     flash(request, "Промпт сохранён")
@@ -58,7 +68,7 @@ def save_prompt(request: Request, prompt_id: str = Form(""), name: str = Form(..
 def make_default(request: Request, prompt_id: int, user_id: int = Depends(require_user),
                  db: Session = Depends(get_db)):
     prompt = _own_prompt(db, prompt_id, user_id)
-    db.execute(update(Prompt).where(Prompt.user_id == user_id).values(is_default=False))
+    db.execute(update(Prompt).where(Prompt.user_id == user_id, Prompt.kind == prompt.kind).values(is_default=False))
     prompt.is_default = True
     db.commit()
     flash(request, f"«{prompt.name}» теперь основной промпт")
@@ -87,8 +97,15 @@ def settings_page(request: Request, user_id: int = Depends(require_user), db: Se
         ai_status = f"Готово: {ai.user_config(db, user).label}"
     except ai.AIError as e:
         ai_status = str(e)
+    try:
+        cfg = ai.image_config(db, user)
+        img_status = f"Готово: {cfg.label}, модель {cfg.model}" + ("" if cfg.separate else " (ключ основной нейросети)")
+    except ai.AIError as e:
+        img_status = str(e)
     return render(request, "settings.html", active="settings", themes=THEMES, providers=ai.PROVIDERS,
-                  ai_settings=ai.describe(db, user), ai_status=ai_status)
+                  ai_settings=ai.describe(db, user), ai_status=ai_status,
+                  img_providers=ai.IMAGE_PROVIDERS, img_models=ai.IMAGE_MODEL_HINTS, img_sizes=ai.IMAGE_SIZES,
+                  img_settings=ai.describe_images(db, user), img_status=img_status)
 
 
 @router.post("/settings/theme")
@@ -132,6 +149,28 @@ def save_ai(request: Request, provider: str = Form(...), model: str = Form(""), 
     return redirect("/settings#ai")
 
 
+@router.post("/settings/images")
+def save_images(request: Request, provider: str = Form(""), model: str = Form(""), api_key: str = Form(""),
+                base_url: str = Form(""), size: str = Form(""), remove_key: str = Form(""),
+                user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    provider = provider if provider in ai.IMAGE_PROVIDERS else ""
+    set_setting(db, user_id, "img_provider", provider)
+    set_setting(db, user_id, "img_model", model.strip())
+    base_url = base_url.strip()
+    if base_url and not re.match(r"^https?://", base_url):
+        flash(request, "Адрес API для картинок должен начинаться с https://", "warn")
+        base_url = ""
+    set_setting(db, user_id, "img_base_url", base_url)
+    set_setting(db, user_id, "img_size", size if size in ai.IMAGE_SIZES else ai.IMAGE_SIZES[0])
+    if remove_key or not provider:
+        set_setting(db, user_id, "img_api_key", "")
+    elif api_key.strip():
+        set_setting(db, user_id, "img_api_key", encrypt(api_key.strip()))
+    db.commit()
+    flash(request, "Настройки картинок сохранены")
+    return redirect("/settings#images")
+
+
 @router.post("/settings/ai/test")
 def test_ai(request: Request, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     """Короткий пробный запрос к нейросети с сохранёнными настройками."""
@@ -140,7 +179,7 @@ def test_ai(request: Request, user_id: int = Depends(require_user), db: Session 
         answer = ai.complete(cfg, "Отвечай кратко.", "Ответь одним словом: работает?", quick_test=True)
     except ai.AIError as e:
         return JSONResponse({"ok": False, "error": str(e)})
-    return {"ok": True, "message": f"{cfg.label}, модель {cfg.model} ({cfg.key_source} ключ) — ответ: "
+    return {"ok": True, "message": f"{cfg.label}, модель {cfg.model} — ответ: "
                                    f"«{(answer or '').strip()[:60] or 'пустой, но соединение есть'}»"}
 
 
@@ -159,74 +198,3 @@ def change_password(request: Request, current: str = Form(...), new: str = Form(
         db.commit()
         flash(request, "Пароль изменён")
     return redirect("/settings")
-
-
-# ---------- Пользователи (только администратор) ----------
-
-LOGIN_RE = re.compile(r"^[A-Za-z0-9._@-]{3,50}$")
-
-
-@router.get("/users")
-def users_page(request: Request, user_id: int = Depends(require_admin), db: Session = Depends(get_db)):
-    users = db.scalars(select(User).order_by(User.id)).all()
-    news_counts = dict(db.execute(select(News.user_id, func.count(News.id)).group_by(News.user_id)).all())
-    source_counts = dict(db.execute(select(Source.user_id, func.count(Source.id)).group_by(Source.user_id)).all())
-    return render(request, "users.html", active="users", users=users, news_counts=news_counts,
-                  source_counts=source_counts)
-
-
-@router.post("/users")
-def add_user(request: Request, login: str = Form(...), password: str = Form(...), is_admin: str = Form(""),
-             user_id: int = Depends(require_admin), db: Session = Depends(get_db)):
-    login = login.strip()
-    if not LOGIN_RE.match(login):
-        flash(request, "Логин: 3–50 символов, латиница, цифры и . _ @ -", "warn")
-    elif len(password) < 8:
-        flash(request, "Пароль — минимум 8 символов", "warn")
-    elif db.scalar(select(User.id).where(User.login == login)):
-        flash(request, f"Пользователь «{login}» уже есть", "warn")
-    else:
-        create_user(db, login, password, is_admin=bool(is_admin))
-        db.commit()
-        flash(request, f"Пользователь «{login}» создан. Передайте ему логин и пароль.")
-    return redirect("/users")
-
-
-def _other_user(db: Session, target_id: int, user_id: int) -> User:
-    target = db.get(User, target_id)
-    if not target:
-        raise HTTPException(404, "Пользователь не найден")
-    return target
-
-
-@router.post("/users/{target_id}/password")
-def reset_password(request: Request, target_id: int, password: str = Form(...),
-                   user_id: int = Depends(require_admin), db: Session = Depends(get_db)):
-    target = _other_user(db, target_id, user_id)
-    if len(password) < 8:
-        flash(request, "Пароль — минимум 8 символов", "warn")
-    else:
-        target.password_hash = hash_password(password)
-        db.commit()
-        flash(request, f"Пароль пользователя «{target.login}» изменён")
-    return redirect("/users")
-
-
-@router.post("/users/{target_id}/toggle")
-def toggle_user(request: Request, target_id: int, field: str = Form(...),
-                user_id: int = Depends(require_admin), db: Session = Depends(get_db)):
-    target = _other_user(db, target_id, user_id)
-    if target.id == user_id:
-        flash(request, "Себя отключить или лишить прав нельзя", "warn")
-        return redirect("/users")
-    if field == "active":
-        target.is_active = not target.is_active
-        if not target.is_active:
-            from ..services import scheduler
-            scheduler.set_enabled(target.id, False)
-        flash(request, f"«{target.login}»: " + ("вход разрешён" if target.is_active else "вход запрещён"))
-    elif field == "admin":
-        target.is_admin = not target.is_admin
-        flash(request, f"«{target.login}»: " + ("теперь администратор" if target.is_admin else "больше не администратор"))
-    db.commit()
-    return redirect("/users")

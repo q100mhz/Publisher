@@ -3,23 +3,31 @@
 {% block content %}
 <div class="page-head">
   <h1>Справочник промптов</h1>
-  <a class="btn" href="{{ url('/prompts?edit=0') }}">+ Новый промпт</a>
+  <div class="actions">
+    <a class="btn" href="{{ url('/prompts?edit=0&kind=text') }}">+ Промпт для статьи</a>
+    <a class="btn btn-yellow" href="{{ url('/prompts?edit=0&kind=image') }}">+ Промпт для картинки</a>
+  </div>
 </div>
 <div class="prompts-layout">
   <div class="card">
-    {% for p in prompts %}
-      <a class="prompt-item {{ 'on' if current and current.id == p.id }}" href="{{ url('/prompts?edit=' ~ p.id) }}">
-        {{ p.name }} {% if p.is_default %}<span class="chip {{ 'light' if current and current.id == p.id else 's-published' }}">основной</span>{% endif %}
-      </a>
-    {% else %}
-      <p class="muted">Промптов пока нет</p>
+    {% for k, label in kinds.items() %}
+      <h3 class="prompt-group">{{ label }}</h3>
+      {% for p in prompts if p.kind == k %}
+        <a class="prompt-item {{ 'on' if current and current.id == p.id }}" href="{{ url('/prompts?edit=' ~ p.id) }}">
+          {{ p.name }} {% if p.is_default %}<span class="chip {{ 'light' if current and current.id == p.id else 's-published' }}">основной</span>{% endif %}
+        </a>
+      {% else %}
+        <p class="muted small">Пока нет</p>
+      {% endfor %}
     {% endfor %}
   </div>
 
   <div class="card">
     {% if current or request.query_params.get('edit') == '0' %}
+    <h2 style="margin-bottom:14px">{{ kinds[kind] }}{% if not current %}: новый промпт{% endif %}</h2>
     <form method="post" action="{{ url('/prompts') }}">
       <input type="hidden" name="prompt_id" value="{{ current.id if current else '' }}">
+      <input type="hidden" name="kind" value="{{ kind }}">
       <div class="field">
         <label for="pname">Название</label>
         <input id="pname" type="text" name="name" value="{{ current.name if current else '' }}" required>
@@ -30,9 +38,15 @@
           {% for key, label in placeholders.items() %}<button type="button" data-insert="{{ key }}" title="{{ label }}">{{ key }}</button>{% endfor %}
         </div>
         <textarea id="ptext" name="text" rows="18" required data-prompt-text>{{ current.text if current else '' }}</textarea>
+        {% if kind == 'image' %}
+        <p class="hint">Описание картинки, которое уйдёт в нейросеть для картинок. Подстановки заменяются данными новости.
+          Пишите, <b>что</b> изобразить и <b>в каком стиле</b>; попросите не добавлять текст на изображение — нейросети часто пишут его с ошибками.
+          Длинный промпт обрезается до 3800 символов.</p>
+        {% else %}
         <p class="hint">Нажмите на подстановку, чтобы вставить её в текст. При генерации вместо неё подставится значение из новости.
           Если <code>{original_text}</code> в промпте нет — текст оригинала добавится в конец автоматически.
           Нейросеть всегда получает указание вернуть только HTML-код.</p>
+        {% endif %}
       </div>
       <div style="display:flex;gap:10px;flex-wrap:wrap">
         <button type="submit" class="btn-green">Сохранить</button>
@@ -47,7 +61,7 @@
     </div>
     {% endif %}
     {% else %}
-      <div class="empty"><h3>Выберите промпт слева</h3><p class="muted">Основной промпт выбирается в карточке новости по умолчанию.</p></div>
+      <div class="empty"><h3>Выберите промпт слева</h3><p class="muted">Основной промпт каждого вида выбирается в карточке новости по умолчанию.</p></div>
     {% endif %}
   </div>
 </div>

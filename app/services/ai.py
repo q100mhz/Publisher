@@ -8,7 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from ..config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
+from ..config import DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 from ..crypto import decrypt, mask
 from ..models import User, get_setting
 
@@ -21,6 +21,7 @@ PROVIDERS: dict[str, dict] = {
         "default_model": DEEPSEEK_MODEL,
         "key_url": "https://platform.deepseek.com/api_keys",
         "temperature": True,
+        "images": False,  # умеет ли создавать картинки по тому же ключу
     },
     "openai": {
         "label": "OpenAI (ChatGPT)",
@@ -30,6 +31,7 @@ PROVIDERS: dict[str, dict] = {
         "default_model": "",
         "key_url": "https://platform.openai.com/api-keys",
         "temperature": True,
+        "images": True,  # умеет ли создавать картинки по тому же ключу
     },
     "anthropic": {
         "label": "Anthropic (Claude)",
@@ -39,6 +41,7 @@ PROVIDERS: dict[str, dict] = {
         "default_model": "claude-opus-5-5",
         "key_url": "https://platform.claude.com/settings/keys",
         "temperature": False,  # у текущих моделей Claude температура не настраивается
+        "images": False,  # умеет ли создавать картинки по тому же ключу
     },
     "openrouter": {
         "label": "OpenRouter (сотни моделей по одному ключу)",
@@ -48,6 +51,7 @@ PROVIDERS: dict[str, dict] = {
         "default_model": "",
         "key_url": "https://openrouter.ai/keys",
         "temperature": True,
+        "images": False,  # умеет ли создавать картинки по тому же ключу
     },
     "custom": {
         "label": "Другой OpenAI-совместимый API",
@@ -57,6 +61,7 @@ PROVIDERS: dict[str, dict] = {
         "default_model": "",
         "key_url": "",
         "temperature": True,
+        "images": True,  # умеет ли создавать картинки по тому же ключу
     },
 }
 
@@ -76,7 +81,6 @@ class AIConfig:
     api_key: str
     base_url: str
     temperature: float | None
-    key_source: str  # «личный» / «общий ключ сервера»
 
     @property
     def label(self) -> str:
@@ -99,14 +103,12 @@ def user_config(db, user: User) -> AIConfig:
             temperature = 1.0
 
     encrypted = get_setting(db, user.id, "ai_api_key", "")
-    api_key, key_source = "", "личный"
+    api_key = ""
     if encrypted:
         api_key = decrypt(encrypted) or ""
         if not api_key:
             raise AIError("Сохранённый API-ключ не читается (на сервере сменился SECRET_KEY). "
                           "Введите ключ заново в «Настройках».")
-    elif provider == "deepseek" and user.is_admin and DEEPSEEK_API_KEY:
-        api_key, key_source = DEEPSEEK_API_KEY, "общий ключ сервера"
 
     if not api_key:
         raise AIError("Не указан API-ключ. Откройте «Настройки» → «Нейросеть» и вставьте свой ключ.")
@@ -114,7 +116,7 @@ def user_config(db, user: User) -> AIConfig:
         raise AIError("Не указана модель. Откройте «Настройки» → «Нейросеть» и впишите название модели.")
     if info["kind"] == "openai" and not base_url:
         raise AIError("Не указан адрес API. Откройте «Настройки» → «Нейросеть».")
-    return AIConfig(provider, model, api_key, base_url, temperature, key_source)
+    return AIConfig(provider, model, api_key, base_url, temperature)
 
 
 def describe(db, user: User) -> dict:
@@ -128,8 +130,107 @@ def describe(db, user: User) -> dict:
         "temperature": get_setting(db, user.id, "ai_temperature", "1.0"),
         "key_mask": mask(key) if key else "",
         "key_broken": bool(encrypted and not key),
-        "server_key": bool(user.is_admin and DEEPSEEK_API_KEY),
     }
+
+
+# ---------- Картинки ----------
+
+IMAGE_PROVIDERS = {
+    "": "Не указан — использовать основную нейросеть",
+    "openai": "OpenAI (картинки)",
+    "custom": "Другой API в формате OpenAI Images",
+}
+IMAGE_MODEL_HINTS = {"openai": ["gpt-image-1", "dall-e-3"], "custom": []}
+IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536", "1792x1024", "1024x1792"]
+
+
+@dataclass
+class ImageConfig:
+    label: str
+    model: str
+    api_key: str
+    base_url: str
+    size: str
+    separate: bool  # True — отдельный API для картинок, False — тот же, что для текста
+
+
+def image_config(db, user: User) -> ImageConfig:
+    """Нейросеть для картинок.
+
+    Если отдельный API для картинок не заполнен, запрос на картинку уходит в основную нейросеть
+    (тот же ключ) — как дополнительный промпт. Это работает, только если основной сервис умеет рисовать.
+    """
+    provider = get_setting(db, user.id, "img_provider", "")
+    encrypted = get_setting(db, user.id, "img_api_key", "")
+    key = decrypt(encrypted) if encrypted else ""
+    if encrypted and not key:
+        raise AIError("Сохранённый ключ для картинок не читается — введите его заново в «Настройках».")
+    model = get_setting(db, user.id, "img_model", "").strip()
+    size = get_setting(db, user.id, "img_size", "") or IMAGE_SIZES[0]
+
+    if provider in ("openai", "custom") and key:
+        base_url = (PROVIDERS["openai"]["base_url"] if provider == "openai"
+                    else get_setting(db, user.id, "img_base_url", "").strip())
+        if not base_url:
+            raise AIError("Не указан адрес API для картинок. Откройте «Настройки» → «Картинки».")
+        label, separate = IMAGE_PROVIDERS[provider], True
+    else:
+        main = user_config(db, user)
+        if not PROVIDERS[main.provider].get("images"):
+            raise AIError(f"Отдельный API для картинок не указан, а основная нейросеть ({main.label}) "
+                          "картинки создавать не умеет. Откройте «Настройки» → «Картинки» и укажите сервис и ключ.")
+        key, base_url, label, separate = main.api_key, main.base_url, main.label, False
+    if not model:
+        raise AIError("Не указана модель для картинок. Откройте «Настройки» → «Картинки».")
+    return ImageConfig(label, model, key, base_url, size, separate)
+
+
+def describe_images(db, user: User) -> dict:
+    encrypted = get_setting(db, user.id, "img_api_key", "")
+    key = decrypt(encrypted) if encrypted else None
+    return {
+        "provider": get_setting(db, user.id, "img_provider", ""),
+        "model": get_setting(db, user.id, "img_model", ""),
+        "base_url": get_setting(db, user.id, "img_base_url", ""),
+        "size": get_setting(db, user.id, "img_size", "") or IMAGE_SIZES[0],
+        "key_mask": mask(key) if key else "",
+        "key_broken": bool(encrypted and not key),
+    }
+
+
+def generate_image(cfg: ImageConfig, prompt: str) -> bytes:
+    """Создаёт одну картинку и возвращает её байты."""
+    import base64
+
+    import httpx
+    import openai
+
+    client = openai.OpenAI(api_key=cfg.api_key, base_url=cfg.base_url, timeout=240, max_retries=1)
+    try:
+        response = client.images.generate(model=cfg.model, prompt=prompt, size=cfg.size, n=1)
+    except openai.AuthenticationError:
+        raise AIError("Ключ API для картинок не подошёл. Проверьте его в «Настройках».")
+    except openai.NotFoundError:
+        raise AIError(f"Модель «{cfg.model}» или адрес для картинок не найдены у сервиса {cfg.label}.")
+    except openai.RateLimitError:
+        raise AIError("Превышен лимит запросов или закончились деньги на балансе сервиса картинок.")
+    except openai.APIConnectionError as e:
+        raise AIError(f"Не удалось связаться с {cfg.base_url}: {e}")
+    except openai.APIStatusError as e:
+        raise AIError(f"Сервис картинок вернул ошибку {e.status_code}: {e.message}")
+    if not response.data:
+        raise AIError("Сервис картинок вернул пустой ответ")
+    item = response.data[0]
+    if getattr(item, "b64_json", None):
+        return base64.b64decode(item.b64_json)
+    if getattr(item, "url", None):
+        try:
+            result = httpx.get(item.url, timeout=60, follow_redirects=True)
+            result.raise_for_status()
+            return result.content
+        except httpx.HTTPError as e:
+            raise AIError(f"Картинка создана, но скачать её не удалось: {e}")
+    raise AIError("Сервис картинок не вернул ни картинку, ни ссылку на неё")
 
 
 def complete(cfg: AIConfig, system: str, prompt: str, *, quick_test: bool = False) -> str:

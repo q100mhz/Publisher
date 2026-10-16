@@ -322,4 +322,6 @@ def reset_stale_flags() -> None:
                    .values(status="error", finished_at=now(), log=ParserRun.log + "\nПрервано перезапуском"))
         db.execute(update(News).where(News.gen_state == "running")
                    .values(gen_state="error", gen_error="Прервано перезапуском сервера"))
+        db.execute(update(News).where(News.img_state == "running")
+                   .values(img_state="error", img_error="Прервано перезапуском сервера"))
 

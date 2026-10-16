@@ -28,6 +28,12 @@ def _job_id(user_id: int) -> str:
 
 def _job(user_id: int) -> None:
     with session_scope() as db:
+        user = db.get(User, user_id)
+        if not user or not user.is_active or get_setting(db, user_id, "auto_enabled") != "1":
+            # Пользователя отключили (или рубильник выключили из терминала) — снимаем задачу
+            if scheduler.get_job(_job_id(user_id)):
+                scheduler.remove_job(_job_id(user_id))
+            return
         set_setting(db, user_id, "auto_last_run", datetime.now().isoformat(timespec="seconds"))
     run_all(user_id, "auto")
 

@@ -27,6 +27,14 @@ def _ai_error(db: Session, user) -> str:
         return str(e)
 
 
+def _img_error(db: Session, user) -> str:
+    try:
+        ai.image_config(db, user)
+        return ""
+    except ai.AIError as e:
+        return str(e)
+
+
 def _parse_date(value: str) -> date | None:
     try:
         return date.fromisoformat(value) if value else None
@@ -109,10 +117,13 @@ def card(request: Request, news_id: int, user_id: int = Depends(require_user), d
     news = _get(db, news_id, user_id)
     prompts = db.scalars(select(Prompt).where(Prompt.user_id == user_id)
                          .order_by(Prompt.is_default.desc(), Prompt.name)).all()
+    image_prompts = [p for p in prompts if p.kind == "image"]
+    prompts = [p for p in prompts if p.kind != "image"]
     return render(
         request, "news_card.html", active="registry", news=news, prompts=prompts,
         statuses=NewsStatus.LABELS, versions=news.versions[:20], history=news.history[:50],
-        ai_error=_ai_error(db, request.state.user),
+        ai_error=_ai_error(db, request.state.user), image_prompts=image_prompts,
+        img_error=_img_error(db, request.state.user),
     )
 
 
@@ -281,7 +292,7 @@ def generate(request: Request, news_id: int, prompt_id: int = Form(...), user_id
     if error:
         return JSONResponse({"ok": False, "error": error}, 400)
     prompt = db.get(Prompt, prompt_id)
-    if not prompt or prompt.user_id != user_id:
+    if not prompt or prompt.user_id != user_id or prompt.kind == "image":
         return JSONResponse({"ok": False, "error": "Промпт не найден"}, 400)
     if not news.original_text.strip():
         return JSONResponse({"ok": False, "error": "Нет текста оригинальной новости — нечего переделывать"}, 400)
@@ -291,6 +302,30 @@ def generate(request: Request, news_id: int, prompt_id: int = Form(...), user_id
     db.commit()
     executor.submit(generator.generate, news_id, prompt_id)
     return {"ok": True}
+
+
+@router.post("/news/{news_id}/generate-image")
+def generate_image(request: Request, news_id: int, prompt_id: int = Form(...), user_id: int = Depends(require_user),
+                   db: Session = Depends(get_db)):
+    news = _get(db, news_id, user_id)
+    error = _img_error(db, request.state.user)
+    if error:
+        return JSONResponse({"ok": False, "error": error}, 400)
+    prompt = db.get(Prompt, prompt_id)
+    if not prompt or prompt.user_id != user_id or prompt.kind != "image":
+        return JSONResponse({"ok": False, "error": "Промпт для картинки не найден"}, 400)
+    if news.img_state == "running":
+        return JSONResponse({"ok": False, "error": "Картинка уже создаётся"}, 409)
+    news.img_state, news.img_error = "running", ""
+    db.commit()
+    executor.submit(generator.generate_image, news_id, prompt_id)
+    return {"ok": True}
+
+
+@router.get("/news/{news_id}/image-generation")
+def image_generation_state(news_id: int, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    news = _get(db, news_id, user_id)
+    return {"state": news.img_state, "error": news.img_error}
 
 
 @router.get("/news/{news_id}/generation")

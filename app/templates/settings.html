@@ -3,10 +3,11 @@
 {% block content %}
 <div class="page-head">
   <h1>Настройки</h1>
-  <span class="chip light">Вы вошли как {{ user.login }}{{ ' · администратор' if user.is_admin }}</span>
+  <span class="chip light">Вы вошли как {{ user.login }}</span>
 </div>
 
 <div class="settings-grid">
+  <div>
   <div class="card" id="ai">
     <h2 style="margin-bottom:6px">Нейросеть</h2>
     <p class="hint" style="margin:0 0 16px">Свой сервис и свой ключ у каждого пользователя. Ключ хранится на сервере в зашифрованном виде и обратно в браузер не передаётся.</p>
@@ -44,8 +45,6 @@
         {% if ai_settings.key_broken %}<p class="hint" style="color:var(--red)">Сохранённый ключ не читается — вставьте его заново.</p>{% endif %}
         {% if ai_settings.key_mask %}
           <label class="check-inline"><input type="checkbox" name="remove_key" value="1"> Удалить сохранённый ключ</label>
-        {% elif ai_settings.server_key %}
-          <p class="hint">Пока ключ не указан, для DeepSeek используется общий ключ сервера (из .env). Он доступен только администраторам.</p>
         {% endif %}
       </div>
 
@@ -62,6 +61,52 @@
       <div class="gen-status {{ 'running' if ai_status.startswith('Готово') else 'error' }}" style="margin-top:14px" data-ai-status>{{ ai_status }}</div>
       <p class="hint">Проверка использует уже сохранённые настройки — сначала нажмите «Сохранить».</p>
     </form>
+  </div>
+
+  <div class="card" id="images">
+    <h2 style="margin-bottom:6px">Картинки</h2>
+    <p class="hint" style="margin:0 0 16px">Нейросеть, которая рисует иллюстрации к статьям. Если отдельный сервис не указан, запрос на картинку уходит
+      в основную нейросеть с её же ключом — как дополнительный промпт. Это сработает, только если основной сервис умеет рисовать
+      (OpenAI или совместимый API). DeepSeek и Claude картинки не создают.</p>
+    <form method="post" action="{{ url('/settings/images') }}">
+      <div class="field">
+        <label for="img_provider">Сервис для картинок</label>
+        <select id="img_provider" name="provider" data-img-provider>
+          {% for key, label in img_providers.items() %}
+            <option value="{{ key }}" {{ 'selected' if img_settings.provider == key }} data-models="{{ img_models.get(key, [])|join('|') }}">{{ label }}</option>
+          {% endfor %}
+        </select>
+      </div>
+      <div class="field" data-img-base-url>
+        <label for="img_base_url">Адрес API</label>
+        <input id="img_base_url" type="url" name="base_url" value="{{ img_settings.base_url }}" placeholder="https://example.com/v1">
+        <p class="hint">Сервис должен принимать запросы в формате OpenAI Images (<code>/images/generations</code>).</p>
+      </div>
+      <div class="field" data-img-key>
+        <label for="img_api_key">API-ключ для картинок</label>
+        <input id="img_api_key" type="password" name="api_key" autocomplete="off"
+               placeholder="{{ 'сохранён: ' ~ img_settings.key_mask ~ ' — оставьте пустым, чтобы не менять' if img_settings.key_mask else 'вставьте ключ' }}">
+        {% if img_settings.key_broken %}<p class="hint" style="color:var(--red)">Сохранённый ключ не читается — вставьте его заново.</p>{% endif %}
+        {% if img_settings.key_mask %}<label class="check-inline"><input type="checkbox" name="remove_key" value="1"> Удалить сохранённый ключ</label>{% endif %}
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label for="img_model">Модель для картинок</label>
+          <input id="img_model" type="text" name="model" value="{{ img_settings.model }}" list="img-model-list" autocomplete="off" placeholder="например, gpt-image-1">
+          <datalist id="img-model-list" data-img-model-list></datalist>
+        </div>
+        <div class="field">
+          <label for="img_size">Размер</label>
+          <select id="img_size" name="size">
+            {% for size in img_sizes %}<option value="{{ size }}" {{ 'selected' if img_settings.size == size }}>{{ size.replace('x', ' × ') }}</option>{% endfor %}
+          </select>
+        </div>
+      </div>
+      <p class="hint">Не каждая модель поддерживает каждый размер: квадрат 1024 × 1024 работает почти везде.</p>
+      <button type="submit">Сохранить</button>
+      <div class="gen-status {{ 'running' if img_status.startswith('Готово') else 'error' }}" style="margin-top:14px">{{ img_status }}</div>
+    </form>
+  </div>
   </div>
 
   <div>

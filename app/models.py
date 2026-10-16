@@ -39,7 +39,6 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     login: Mapped[str] = mapped_column(String(100), unique=True)
     password_hash: Mapped[str] = mapped_column(String(200))
-    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)   # может создавать пользователей
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)   # выключенный не может войти
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
@@ -102,7 +101,8 @@ class Prompt(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     text: Mapped[str] = mapped_column(Text)
-    is_default: Mapped[bool] = mapped_column(Boolean, default=False)
+    kind: Mapped[str] = mapped_column(String(20), default="text")  # text — для статьи, image — для картинки
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False)  # основной в своём виде
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
 
@@ -140,6 +140,9 @@ class News(Base):
     gen_state: Mapped[str] = mapped_column(String(20), default="idle")
     gen_error: Mapped[str] = mapped_column(Text, default="")
     gen_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Фоновая генерация картинки: idle / running / error
+    img_state: Mapped[str] = mapped_column(String(20), default="idle")
+    img_error: Mapped[str] = mapped_column(Text, default="")
 
     source: Mapped[Source | None] = relationship(back_populates="news")
     images: Mapped[list["NewsImage"]] = relationship(
@@ -151,6 +154,14 @@ class News(Base):
     history: Mapped[list["NewsHistory"]] = relationship(
         back_populates="news", order_by="NewsHistory.id.desc()", cascade="all, delete-orphan"
     )
+
+    @property
+    def original_images(self) -> list["NewsImage"]:
+        return [i for i in self.images if i.kind != "generated"]
+
+    @property
+    def generated_images(self) -> list["NewsImage"]:
+        return [i for i in self.images if i.kind == "generated"]
 
     @property
     def source_name(self) -> str:
@@ -177,6 +188,7 @@ class NewsImage(Base):
     __tablename__ = "news_images"
     id: Mapped[int] = mapped_column(primary_key=True)
     news_id: Mapped[int] = mapped_column(ForeignKey("news.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20), default="original")  # original — с сайта/загружена, generated — ИИ
     filename: Mapped[str] = mapped_column(String(300))        # оригинал
     thumb_filename: Mapped[str] = mapped_column(String(300))  # миниатюра
     original_name: Mapped[str] = mapped_column(String(300))

@@ -5,8 +5,9 @@ import re
 import traceback
 
 from ..db import session_scope
-from ..models import News, NewsHistory, NewsStatus, NewsVersion, Prompt, User, now
+from ..models import News, NewsHistory, NewsImage, NewsStatus, NewsVersion, Prompt, User, now
 from . import ai
+from .images import ImageError, save_image
 
 SYSTEM_MESSAGE = (
     "Ты — редактор и SEO-копирайтер. Отвечай только готовым HTML-кодом статьи, "
@@ -36,6 +37,76 @@ DEFAULT_PROMPT = """Перепиши новость ниже в уникальн
 Текст оригинала:
 {original_text}
 """
+
+
+IMAGE_PLACEHOLDERS = {
+    "{title}": "Заголовок новости",
+    "{original_text}": "Начало исходного текста (до 1500 символов)",
+    "{generated_text}": "Начало переделанной статьи без HTML (до 1500 символов)",
+}
+
+DEFAULT_IMAGE_PROMPT = """Иллюстрация для статьи на сайте бухгалтерской компании.
+
+Тема статьи: {title}
+О чём статья: {original_text}
+
+Стиль: объёмная «пластилиновая» 3D-иллюстрация, мягкий свет, светлый однотонный фон,
+яркие тёплые цвета (оранжевый, жёлтый). Без текста, букв и цифр на изображении.
+"""
+
+IMAGE_PROMPT_LIMIT = 3800  # у некоторых моделей картинок жёсткий лимит длины промпта
+
+
+def _plain(text_: str, limit: int) -> str:
+    text_ = re.sub(r"<(script|style|title)[^>]*>.*?</\1>", " ", text_ or "", flags=re.S | re.I)
+    text_ = re.sub(r"<[^>]+>|[#*_`>]+", " ", text_)
+    text_ = re.sub(r"\s+", " ", text_).strip()
+    return text_[:limit].rsplit(" ", 1)[0] + "…" if len(text_) > limit else text_
+
+
+def render_image_prompt(template: str, news: News) -> str:
+    values = {
+        "{title}": news.title or "",
+        "{original_text}": _plain(news.original_text, 1500),
+        "{generated_text}": _plain(news.html_code, 1500),
+    }
+    text_ = template
+    for key, value in values.items():
+        text_ = text_.replace(key, value)
+    if "{title}" not in template:
+        text_ += f"\n\nТема статьи: {values['{title}']}"
+    return text_[:IMAGE_PROMPT_LIMIT]
+
+
+def generate_image(news_id: int, prompt_id: int) -> None:
+    """Фоновая генерация картинки: результат кладётся в колонку «Сгенерировано ИИ»."""
+    try:
+        with session_scope() as db:
+            news = db.get(News, news_id)
+            prompt = db.get(Prompt, prompt_id)
+            cfg = ai.image_config(db, db.get(User, news.user_id))
+            image_prompt = render_image_prompt(prompt.text, news)
+            prompt_name = prompt.name
+            number = len(news.generated_images) + 1
+
+        data = ai.generate_image(cfg, image_prompt)
+        info = save_image(data, f"ai-{news_id}-{number}.png")
+
+        with session_scope() as db:
+            news = db.get(News, news_id)
+            db.add(NewsImage(news_id=news_id, kind="generated", **info))
+            news.img_state, news.img_error = "idle", ""
+            db.add(NewsHistory(news_id=news_id, action=f"Сгенерирована картинка (промпт «{prompt_name}», "
+                                                       f"{cfg.label}: {cfg.model})"))
+    except Exception as e:
+        if not isinstance(e, (ai.AIError, ImageError)):
+            traceback.print_exc()
+        with session_scope() as db:
+            news = db.get(News, news_id)
+            news.img_state = "error"
+            news.img_error = (str(e) if isinstance(e, (ai.AIError, ImageError))
+                              else f"{e.__class__.__name__}: {e}")[:1000]
+            db.add(NewsHistory(news_id=news_id, action="Ошибка генерации картинки"))
 
 
 def render_prompt(template: str, news: News) -> str:

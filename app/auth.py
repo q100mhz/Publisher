@@ -1,12 +1,11 @@
-"""Вход по логину и паролю. Самостоятельной регистрации нет: пользователей создаёт администратор."""
+"""Вход по логину и паролю. Регистрации нет: пользователей создаёт владелец сервера из терминала."""
 import time
 from collections import defaultdict
 
 import bcrypt
 from fastapi import HTTPException, Request
-from sqlalchemy import func, select
+from sqlalchemy import select
 
-from .config import ADMIN_LOGIN, ADMIN_PASSWORD
 from .db import SessionLocal, session_scope
 from .models import Prompt, User, get_setting
 
@@ -15,6 +14,7 @@ LOCK_SECONDS = 15 * 60  # на сколько блокируется IP посл
 _fails: dict[str, list[float]] = defaultdict(list)
 
 DEFAULT_PROMPT_NAME = "Основной: SEO-статья"
+DEFAULT_IMAGE_PROMPT_NAME = "Основной: иллюстрация к статье"
 
 
 def hash_password(password: str) -> str:
@@ -53,34 +53,31 @@ def reset_fails(ip: str) -> None:
 
 
 def seed_user(db, user: User) -> None:
-    """Стартовый набор нового кабинета: основной промпт."""
-    from .services.generator import DEFAULT_PROMPT
+    """Стартовый набор кабинета: основной промпт для статьи и основной промпт для картинки."""
+    from .services.generator import DEFAULT_IMAGE_PROMPT, DEFAULT_PROMPT
 
-    if not db.scalar(select(Prompt.id).where(Prompt.user_id == user.id).limit(1)):
-        db.add(Prompt(user_id=user.id, name=DEFAULT_PROMPT_NAME, text=DEFAULT_PROMPT, is_default=True))
+    for kind, name, text_ in (("text", DEFAULT_PROMPT_NAME, DEFAULT_PROMPT),
+                              ("image", DEFAULT_IMAGE_PROMPT_NAME, DEFAULT_IMAGE_PROMPT)):
+        if not db.scalar(select(Prompt.id).where(Prompt.user_id == user.id, Prompt.kind == kind).limit(1)):
+            db.add(Prompt(user_id=user.id, kind=kind, name=name, text=text_, is_default=True))
 
 
-def create_user(db, login: str, password: str, is_admin: bool = False) -> User:
-    user = User(login=login, password_hash=hash_password(password), is_admin=is_admin)
+def create_user(db, login: str, password: str) -> User:
+    user = User(login=login, password_hash=hash_password(password))
     db.add(user)
     db.flush()
     seed_user(db, user)
     return user
 
 
-def ensure_admin() -> None:
-    """При первом запуске создаёт администратора из ADMIN_LOGIN / ADMIN_PASSWORD."""
+def ensure_users_ready() -> None:
+    """У каждого пользователя должны быть стартовые промпты. Подсказывает, как создать первого пользователя."""
     with session_scope() as db:
-        if db.scalar(select(func.count(User.id))):
-            for user in db.scalars(select(User)):
-                seed_user(db, user)
-            return
-        if not (ADMIN_LOGIN and ADMIN_PASSWORD):
-            print("[auth] Пользователь не создан: задайте ADMIN_LOGIN и ADMIN_PASSWORD в .env "
-                  "или выполните: python -m app.cli set-password <логин>")
-            return
-        create_user(db, ADMIN_LOGIN, ADMIN_PASSWORD, is_admin=True)
-        print(f"[auth] Создан администратор «{ADMIN_LOGIN}». Пароль из .env можно удалить.")
+        users = db.scalars(select(User)).all()
+        for user in users:
+            seed_user(db, user)
+    if not users:
+        print("[auth] Пользователей нет. Создайте: docker compose exec app python -m app.cli add-user <логин>")
 
 
 class LoginRequired(Exception):
@@ -106,10 +103,3 @@ def require_user(request: Request) -> int:
         request.state.user = user
         request.state.theme = get_setting(db, user.id, "theme", "auto")
     return user.id
-
-
-def require_admin(request: Request) -> int:
-    user_id = require_user(request)
-    if not request.state.user.is_admin:
-        raise HTTPException(403, "Раздел доступен только администратору")
-    return user_id

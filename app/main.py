@@ -7,7 +7,7 @@ from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
-from .auth import LoginRequired, ensure_admin
+from .auth import LoginRequired, ensure_users_ready
 from .config import BASE_PATH, COOKIE_SECURE, SECRET_KEY
 from . import migrate
 from .db import Base, engine
@@ -19,7 +19,7 @@ from .services import parser, scheduler
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
     migrate.run()
-    ensure_admin()
+    ensure_users_ready()
     parser.reset_stale_flags()
     scheduler.start()
     yield

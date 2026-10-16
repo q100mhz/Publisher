@@ -94,14 +94,9 @@
       </div>
     </form>
 
-    <div class="card" id="images" style="margin-top:22px">
-      <div class="card-head">
-        <h2>Картинки <span class="muted small">({{ news.images|length }})</span></h2>
-        <span class="small muted">Клик по миниатюре — скачать оригинал</span>
-      </div>
-      {% if news.images %}
+{% macro gallery(images) %}
       <div class="gallery">
-        {% for img in news.images %}
+        {% for img in images %}
         <div class="img">
           <a class="thumb" href="{{ url('/media/' ~ img.id ~ '/original') }}" download="{{ img.original_name }}" title="{{ img.original_name }} — {{ img.width }}×{{ img.height }}">
             <img src="{{ url('/media/' ~ img.id ~ '/thumb') }}" alt="{{ img.original_name }}" loading="lazy">
@@ -113,14 +108,48 @@
         </div>
         {% endfor %}
       </div>
-      {% endif %}
-      <form method="post" action="{{ url('/news/' ~ news.id ~ '/images') }}" enctype="multipart/form-data" data-upload-form>
-        <label class="dropzone" data-dropzone>
-          <input type="file" name="images" accept="image/*" multiple data-autosubmit-files>
-          <span style="font-size:26px">＋</span>
-          Перетащите картинки сюда или нажмите, чтобы выбрать (можно несколько)
-        </label>
-      </form>
+{% endmacro %}
+    <div class="card" id="images" style="margin-top:22px">
+      <div class="card-head">
+        <h2>Картинки</h2>
+        <span class="small muted">Клик по миниатюре — скачать в оригинальном размере</span>
+      </div>
+      <div class="image-columns">
+        <section class="image-col">
+          <h3>Оригинал <span class="muted small">({{ news.original_images|length }})</span></h3>
+          {% if news.original_images %}{{ gallery(news.original_images) }}{% else %}<p class="muted small">Картинок из оригинала нет</p>{% endif %}
+          <form method="post" action="{{ url('/news/' ~ news.id ~ '/images') }}" enctype="multipart/form-data" data-upload-form>
+            <label class="dropzone" data-dropzone>
+              <input type="file" name="images" accept="image/*" multiple data-autosubmit-files>
+              <span style="font-size:26px">＋</span>
+              Перетащите картинки или нажмите, чтобы выбрать
+            </label>
+          </form>
+        </section>
+
+        <section class="image-col image-col-ai">
+          <h3>Сгенерировано ИИ <span class="muted small">({{ news.generated_images|length }})</span></h3>
+          {% if news.generated_images %}{{ gallery(news.generated_images) }}{% else %}<p class="muted small">Здесь появятся картинки, нарисованные нейросетью</p>{% endif %}
+          <div class="gen-bar img-gen-bar">
+            <div class="field">
+              <label for="img-prompt">Промпт для картинки</label>
+              <select id="img-prompt" data-img-prompt>
+                {% for p in image_prompts %}<option value="{{ p.id }}">{{ p.name }}{{ ' (основной)' if p.is_default }}</option>{% endfor %}
+              </select>
+            </div>
+            <button type="button" class="btn-yellow" data-generate-image data-url="{{ url('/news/' ~ news.id ~ '/generate-image') }}"
+                    data-state-url="{{ url('/news/' ~ news.id ~ '/image-generation') }}"
+                    {{ 'disabled' if img_error or news.img_state == 'running' or not image_prompts }}>🎨 Сгенерировать картинку</button>
+          </div>
+          {% if img_error %}
+            <div class="gen-status error">{{ img_error }} <a href="{{ url('/settings') }}#images">Открыть настройки →</a></div>
+          {% endif %}
+          <div class="gen-status running {{ 'hidden' if news.img_state != 'running' }}" data-img-running>
+            <span class="blob-loader"></span> Нейросеть рисует — обычно 20–60 секунд.
+          </div>
+          <div class="gen-status error {{ 'hidden' if news.img_state != 'error' }}" data-img-error>{{ news.img_error }}</div>
+        </section>
+      </div>
     </div>
   </div>
 

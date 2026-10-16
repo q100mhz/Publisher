@@ -4,11 +4,15 @@ FROM mcr.microsoft.com/playwright/python:v1.49.1-noble
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1 \
+    PIP_DEFAULT_TIMEOUT=120 \
     TZ=Europe/Moscow
+
+# Откуда pip скачивает пакеты. Если pypi.org с сервера недоступен или медленный — задайте зеркало в .env
+ARG PIP_INDEX_URL=https://pypi.org/simple
 
 WORKDIR /app
 COPY requirements.txt .
-RUN pip install -r requirements.txt
+RUN pip install --retries 10 --index-url "$PIP_INDEX_URL" -r requirements.txt
 
 COPY app ./app
 RUN mkdir -p /app/data/media && chown -R pwuser:pwuser /app/data

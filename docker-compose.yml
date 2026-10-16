@@ -16,7 +16,11 @@ services:
       retries: 10
 
   app:
-    build: .
+    build:
+      context: .
+      network: host  # сборка ходит в интернет напрямую через сеть сервера, без моста Docker
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-https://pypi.org/simple}
     restart: unless-stopped
     env_file: .env
     environment:

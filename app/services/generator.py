@@ -1,14 +1,12 @@
-"""Генерация переработанной статьи через DeepSeek API (OpenAI-совместимый)."""
+"""Генерация переработанной статьи нейросетью, выбранной пользователем в настройках."""
 from __future__ import annotations
 
 import re
 import traceback
 
-from openai import OpenAI
-
-from ..config import DEEPSEEK_API_KEY, DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 from ..db import session_scope
-from ..models import News, NewsHistory, NewsStatus, NewsVersion, Prompt, get_float_setting, get_setting, now
+from ..models import News, NewsHistory, NewsStatus, NewsVersion, Prompt, User, now
+from . import ai
 
 SYSTEM_MESSAGE = (
     "Ты — редактор и SEO-копирайтер. Отвечай только готовым HTML-кодом статьи, "
@@ -40,10 +38,6 @@ DEFAULT_PROMPT = """Перепиши новость ниже в уникальн
 """
 
 
-def is_configured() -> bool:
-    return bool(DEEPSEEK_API_KEY)
-
-
 def render_prompt(template: str, news: News) -> str:
     values = {
         "{title}": news.title or "",
@@ -73,21 +67,14 @@ def generate(news_id: int, prompt_id: int) -> None:
         with session_scope() as db:
             news = db.get(News, news_id)
             prompt = db.get(Prompt, prompt_id)
+            user = db.get(User, news.user_id)
+            cfg = ai.user_config(db, user)
             user_message = render_prompt(prompt.text, news)
             prompt_name = prompt.name
-            model = get_setting(db, "deepseek_model", DEEPSEEK_MODEL) or DEEPSEEK_MODEL
-            temperature = get_float_setting(db, "deepseek_temperature", 1.0)
 
-        client = OpenAI(api_key=DEEPSEEK_API_KEY, base_url=DEEPSEEK_BASE_URL, timeout=300, max_retries=1)
-        response = client.chat.completions.create(
-            model=model,
-            temperature=temperature,
-            messages=[{"role": "system", "content": SYSTEM_MESSAGE},
-                      {"role": "user", "content": user_message}],
-        )
-        html = clean_html(response.choices[0].message.content or "")
+        html = clean_html(ai.complete(cfg, SYSTEM_MESSAGE, user_message))
         if not html:
-            raise RuntimeError("Нейросеть вернула пустой ответ")
+            raise ai.AIError("Нейросеть вернула пустой ответ")
 
         with session_scope() as db:
             news = db.get(News, news_id)
@@ -96,14 +83,16 @@ def generate(news_id: int, prompt_id: int) -> None:
                 news.status = NewsStatus.GENERATED
             news.gen_state = "idle"
             news.gen_error = ""
+            model = f"{cfg.label}: {cfg.model}"[:100]
             db.add(NewsVersion(news_id=news_id, html_code=html, prompt_name=prompt_name, model=model))
             db.add(NewsHistory(news_id=news_id, action=f"Сгенерирован текст (промпт «{prompt_name}», {model})"))
     except Exception as e:
-        traceback.print_exc()
+        if not isinstance(e, ai.AIError):
+            traceback.print_exc()
         with session_scope() as db:
             news = db.get(News, news_id)
             news.gen_state = "error"
-            news.gen_error = f"{e.__class__.__name__}: {e}"[:1000]
+            news.gen_error = (str(e) if isinstance(e, ai.AIError) else f"{e.__class__.__name__}: {e}")[:1000]
             db.add(NewsHistory(news_id=news_id, action="Ошибка генерации"))
 
 

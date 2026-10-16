@@ -30,7 +30,8 @@ from .images import ImageError, save_image
 MIN_TEXT_LEN = 300  # если текста меньше — пробуем открыть статью через браузер
 
 executor = ThreadPoolExecutor(max_workers=3, thread_name_prefix="worker")
-_auto_lock = threading.Lock()
+_auto_locks: dict[int, threading.Lock] = {}  # по одному обходу рубильника на пользователя
+_locks_guard = threading.Lock()
 
 
 class RunLog:
@@ -144,6 +145,7 @@ def _discover_older(source: Source, known: set[str], want: int, log: RunLog) -> 
 def _save_article(source_id: int, article: Article, created_at: datetime, log: RunLog) -> int:
     with session_scope() as db:
         news = News(
+            user_id=db.get(Source, source_id).user_id,
             title=article.title[:1000] or article.url,
             created_at=created_at,
             origin="parser",
@@ -185,7 +187,7 @@ def run_source(source_id: int, trigger: str = "manual", mode: str = "new") -> No
         if not got:
             return
         source = db.get(Source, source_id)
-        run = ParserRun(source_id=source_id, trigger="older" if mode == "older" else trigger)
+        run = ParserRun(source_id=source_id, user_id=source.user_id, trigger="older" if mode == "older" else trigger)
         db.add(run)
         db.flush()
         run_id = run.id
@@ -292,17 +294,20 @@ def run_source(source_id: int, trigger: str = "manual", mode: str = "new") -> No
             run.finished_at = now()
 
 
-def run_all(trigger: str = "auto") -> None:
-    """Обход всех активных источников (используется рубильником)."""
-    if not _auto_lock.acquire(blocking=False):
+def run_all(user_id: int, trigger: str = "auto") -> None:
+    """Обход всех активных источников пользователя (используется рубильником)."""
+    with _locks_guard:
+        lock = _auto_locks.setdefault(user_id, threading.Lock())
+    if not lock.acquire(blocking=False):
         return
     try:
         with session_scope() as db:
-            ids = list(db.scalars(select(Source.id).where(Source.is_active.is_(True)).order_by(Source.id)))
+            ids = list(db.scalars(select(Source.id).where(Source.user_id == user_id, Source.is_active.is_(True))
+                                  .order_by(Source.id)))
         for source_id in ids:
             run_source(source_id, trigger)
     finally:
-        _auto_lock.release()
+        lock.release()
 
 
 def submit_source(source_id: int, mode: str = "new") -> None:

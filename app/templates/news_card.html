@@ -65,13 +65,13 @@
             </select>
           </div>
           <button type="button" class="btn-lg" data-generate data-url="{{ url('/news/' ~ news.id ~ '/generate') }}"
-                  data-state-url="{{ url('/news/' ~ news.id ~ '/generation') }}" {{ 'disabled' if not ai_ready or news.gen_state == 'running' }}>
+                  data-state-url="{{ url('/news/' ~ news.id ~ '/generation') }}" {{ 'disabled' if ai_error or news.gen_state == 'running' }}>
             ✦ {{ 'Сгенерировать заново' if news.html_code else 'Сгенерировать' }}
           </button>
           <button type="button" class="btn-lg btn-dark" data-copy>⧉ Скопировать код</button>
         </div>
-        {% if not ai_ready %}
-          <div class="gen-status error">Ключ DeepSeek не задан: добавьте DEEPSEEK_API_KEY в файл .env на сервере и перезапустите контейнер.</div>
+        {% if ai_error %}
+          <div class="gen-status error">{{ ai_error }} <a href="{{ url('/settings') }}#ai">Открыть настройки →</a></div>
         {% endif %}
         <div class="gen-status running {{ 'hidden' if news.gen_state != 'running' }}" data-gen-running>
           <span class="blob-loader"></span> Нейросеть переписывает статью — обычно это 30–90 секунд. Страницу можно не обновлять.
@@ -156,7 +156,7 @@
     <div class="card">
       <h3 style="margin-bottom:12px">Сведения</h3>
       <dl class="kv">
-        <dt>Источник</dt><dd>{{ news.source.name if news.source else 'Создана вручную' }}</dd>
+        <dt>Источник</dt><dd>{{ news.source_name if news.source or news.source_label else 'Создана вручную' }}</dd>
         {% if news.original_published_at %}<dt>Дата оригинала</dt><dd>{{ news.original_published_at|d }}</dd>{% endif %}
         <dt>Создана</dt><dd>{{ news.created_at|dt }}</dd>
         <dt>Изменена</dt><dd>{{ news.updated_at|dt }}</dd>

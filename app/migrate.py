@@ -1,0 +1,73 @@
+"""Обновление структуры уже существующей базы (без потери данных).
+
+Выполняется при каждом запуске и ничего не делает, если всё уже обновлено.
+Новая база создаётся сразу правильной через create_all — здесь только «догоняем» старые.
+
+Переход к многопользовательскому режиму:
+  * в таблицы добавляется владелец (user_id);
+  * всё, что было создано раньше, закрепляется за первым администратором (или первым пользователем);
+  * общие настройки (рубильник, модель DeepSeek) переносятся в его личные настройки.
+"""
+from sqlalchemy import inspect, text
+
+from .db import engine
+
+NEW_COLUMNS = [
+    ("users", "is_admin", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("users", "is_active", "BOOLEAN NOT NULL DEFAULT TRUE"),
+    ("sources", "user_id", "INTEGER"),
+    ("news", "user_id", "INTEGER"),
+    ("news", "source_label", "VARCHAR(200)"),
+    ("prompts", "user_id", "INTEGER"),
+    ("parser_runs", "user_id", "INTEGER"),
+]
+OWNED_TABLES = ["sources", "news", "prompts", "parser_runs"]
+# Старый общий ключ настройки → личный ключ
+OLD_SETTINGS = {
+    "auto_enabled": "auto_enabled",
+    "auto_last_run": "auto_last_run",
+    "deepseek_model": "ai_model",
+    "deepseek_temperature": "ai_temperature",
+}
+
+
+def run() -> None:
+    insp = inspect(engine)
+    tables = set(insp.get_table_names())
+    with engine.begin() as conn:
+        for table, column, ddl in NEW_COLUMNS:
+            if table in tables and column not in {c["name"] for c in insp.get_columns(table)}:
+                conn.execute(text(f"ALTER TABLE {table} ADD COLUMN {column} {ddl}"))
+                print(f"[migrate] {table}.{column} добавлена")
+        for table in OWNED_TABLES:
+            conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_user_id ON {table} (user_id)"))
+
+        owner = conn.execute(text(
+            "SELECT id FROM users ORDER BY is_admin DESC, id LIMIT 1")).scalar()
+        if owner is None:
+            return  # пользователей ещё нет — значит, и данных без владельца нет
+
+        if not conn.execute(text("SELECT 1 FROM users WHERE is_admin = :t LIMIT 1"), {"t": True}).scalar():
+            conn.execute(text("UPDATE users SET is_admin = :t WHERE id = :id"), {"t": True, "id": owner})
+            print(f"[migrate] пользователь #{owner} назначен администратором")
+
+        for table in OWNED_TABLES:
+            moved = conn.execute(text(f"UPDATE {table} SET user_id = :o WHERE user_id IS NULL"), {"o": owner}).rowcount
+            if moved:
+                print(f"[migrate] {table}: {moved} записей закреплено за пользователем #{owner}")
+
+        if "settings" in tables:
+            for old_key, new_key in OLD_SETTINGS.items():
+                value = conn.execute(text("SELECT value FROM settings WHERE key = :k"), {"k": old_key}).scalar()
+                exists = conn.execute(text("SELECT 1 FROM user_settings WHERE user_id = :u AND key = :k"),
+                                      {"u": owner, "k": new_key}).scalar()
+                if value is not None and not exists:
+                    conn.execute(text("INSERT INTO user_settings (user_id, key, value) VALUES (:u, :k, :v)"),
+                                 {"u": owner, "k": new_key, "v": value})
+                    if new_key == "ai_model":
+                        conn.execute(text(
+                            "INSERT INTO user_settings (user_id, key, value) SELECT :u, 'ai_provider', 'deepseek' "
+                            "WHERE NOT EXISTS (SELECT 1 FROM user_settings WHERE user_id = :u AND key = 'ai_provider')"),
+                            {"u": owner})
+            conn.execute(text("DELETE FROM settings WHERE key IN ('auto_enabled', 'auto_last_run', "
+                              "'deepseek_model', 'deepseek_temperature')"))

@@ -2,6 +2,9 @@
 
 Все даты хранятся в локальном времени сервера (TZ=Europe/Moscow в контейнере).
 Новости никогда не удаляются из базы — только помечаются архивными.
+
+Многопользовательский режим: источники, новости, промпты, запуски парсера и настройки
+принадлежат конкретному пользователю (user_id). Чужие данные пользователь не видит.
 """
 from datetime import date, datetime
 
@@ -36,6 +39,8 @@ class User(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     login: Mapped[str] = mapped_column(String(100), unique=True)
     password_hash: Mapped[str] = mapped_column(String(200))
+    is_admin: Mapped[bool] = mapped_column(Boolean, default=False)   # может создавать пользователей
+    is_active: Mapped[bool] = mapped_column(Boolean, default=True)   # выключенный не может войти
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
 
 
@@ -43,6 +48,7 @@ class Source(Base):
     """Справочник сайтов, с которых парсятся статьи."""
     __tablename__ = "sources"
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     url: Mapped[str] = mapped_column(String(1000))
     keywords: Mapped[str] = mapped_column(Text, default="")  # через запятую; пусто = брать всё
@@ -75,8 +81,9 @@ class SeenUrl(Base):
 class ParserRun(Base):
     __tablename__ = "parser_runs"
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), index=True, nullable=True)
     source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id"), nullable=True)
-    trigger: Mapped[str] = mapped_column(String(20))  # auto / manual
+    trigger: Mapped[str] = mapped_column(String(20))  # auto / manual / older
     started_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     finished_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     status: Mapped[str] = mapped_column(String(20), default="running")  # running / ok / error
@@ -92,6 +99,7 @@ class Prompt(Base):
     """Справочник промптов для генерации."""
     __tablename__ = "prompts"
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     text: Mapped[str] = mapped_column(Text)
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -103,6 +111,7 @@ class News(Base):
     """Запись реестра публикаций."""
     __tablename__ = "news"
     id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     title: Mapped[str] = mapped_column(String(1000))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
@@ -110,6 +119,8 @@ class News(Base):
 
     source_id: Mapped[int | None] = mapped_column(ForeignKey("sources.id"), nullable=True, index=True)
     source_url: Mapped[str | None] = mapped_column(String(1000), nullable=True, index=True)
+    # Название источника на случай, если его удалили из справочника (новости при этом остаются)
+    source_label: Mapped[str | None] = mapped_column(String(200), nullable=True)
     original_published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
 
     original_text: Mapped[str] = mapped_column(Text, default="")
@@ -140,6 +151,12 @@ class News(Base):
     history: Mapped[list["NewsHistory"]] = relationship(
         back_populates="news", order_by="NewsHistory.id.desc()", cascade="all, delete-orphan"
     )
+
+    @property
+    def source_name(self) -> str:
+        if self.source:
+            return self.source.name
+        return self.source_label or "Вручную"
 
     @property
     def status_label(self) -> str:
@@ -196,27 +213,35 @@ class NewsHistory(Base):
 
 
 class Setting(Base):
+    """Старые общие настройки (до многопользовательского режима). Читаются только при миграции."""
     __tablename__ = "settings"
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
 
 
-def get_setting(db, key: str, default: str = "") -> str:
-    row = db.get(Setting, key)
+class UserSetting(Base):
+    """Личные настройки пользователя: тема, нейросеть, ключ API, рубильник автопарсинга."""
+    __tablename__ = "user_settings"
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), primary_key=True)
+    key: Mapped[str] = mapped_column(String(100), primary_key=True)
+    value: Mapped[str] = mapped_column(Text, default="")
+
+
+def get_setting(db, user_id: int, key: str, default: str = "") -> str:
+    row = db.get(UserSetting, (user_id, key))
     return row.value if row else default
 
 
-def set_setting(db, key: str, value: str) -> None:
-    row = db.get(Setting, key)
+def set_setting(db, user_id: int, key: str, value: str) -> None:
+    row = db.get(UserSetting, (user_id, key))
     if row:
         row.value = value
     else:
-        db.add(Setting(key=key, value=value))
+        db.add(UserSetting(user_id=user_id, key=key, value=value))
 
 
-def get_float_setting(db, key: str, default: float) -> float:
+def get_float_setting(db, user_id: int, key: str, default: float) -> float:
     try:
-        return float(get_setting(db, key, str(default)))
+        return float(get_setting(db, user_id, key, str(default)))
     except ValueError:
         return default
-

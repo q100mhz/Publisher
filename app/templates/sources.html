@@ -88,6 +88,11 @@
         <div class="field"><label>Ключевые слова</label><input type="text" name="keywords" value="{{ s.keywords }}"></div>
         <button class="btn-sm" type="submit">Сохранить</button>
       </form>
+      <form method="post" action="{{ url('/sources/' ~ s.id ~ '/delete') }}" style="margin-top:14px">
+        <button class="btn-sm btn-red" type="submit"
+                data-confirm="Удалить сайт «{{ s.name }}» из справочника? Загруженные с него новости останутся в реестре, но парсить этот сайт больше не будем.">Удалить источник</button>
+        <span class="hint" style="margin-left:8px">Новости с этого сайта останутся в реестре.</span>
+      </form>
     </details>
   </div>
   {% endfor %}

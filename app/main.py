@@ -5,25 +5,21 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, Request
 from fastapi.responses import PlainTextResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
-from sqlalchemy import select
 from starlette.middleware.sessions import SessionMiddleware
 
 from .auth import LoginRequired, ensure_admin
 from .config import BASE_PATH, COOKIE_SECURE, SECRET_KEY
-from .db import Base, engine, session_scope
-from .models import Prompt
+from . import migrate
+from .db import Base, engine
 from .routes import news, pages, settings, sources
 from .services import parser, scheduler
-from .services.generator import DEFAULT_PROMPT
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     Base.metadata.create_all(engine)
+    migrate.run()
     ensure_admin()
-    with session_scope() as db:
-        if not db.scalar(select(Prompt).limit(1)):
-            db.add(Prompt(name="Основной: SEO-статья", text=DEFAULT_PROMPT, is_default=True))
     parser.reset_stale_flags()
     scheduler.start()
     yield

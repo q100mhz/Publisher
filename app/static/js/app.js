@@ -317,6 +317,52 @@
   }));
   if ($(".dot.running")) startStatusPolling();
 
+  // ---------- Настройки: выбор нейросети ----------
+  const providerSelect = $("[data-provider]");
+  if (providerSelect) {
+    const modelInput = $("[data-model]");
+    const syncProvider = () => {
+      const opt = providerSelect.selectedOptions[0];
+      const models = opt.dataset.models ? opt.dataset.models.split("|") : [];
+      $("[data-model-list]").innerHTML = models.map((m) => `<option value="${m}">`).join("");
+      modelInput.placeholder = opt.dataset.defaultModel || "название модели у этого сервиса";
+      $("[data-model-hint]").textContent = models.length
+        ? `Варианты: ${models.join(", ")}. Пусто — ${opt.dataset.defaultModel || models[0]}.`
+        : "Впишите название модели так, как оно указано в документации сервиса.";
+      $("[data-base-url-field]").classList.toggle("hidden", opt.dataset.custom !== "1");
+      $("[data-temperature-field]").classList.toggle("hidden", opt.dataset.temperature !== "1");
+      const link = $("[data-key-link]");
+      link.innerHTML = opt.dataset.keyUrl
+        ? `Где взять ключ: <a href="${opt.dataset.keyUrl}" target="_blank" rel="noopener noreferrer">${opt.dataset.keyUrl}</a>`
+        : "";
+    };
+    providerSelect.addEventListener("change", () => {
+      // Модель от другого сервиса не подойдёт — очищаем, если она не из списка нового
+      const models = (providerSelect.selectedOptions[0].dataset.models || "").split("|");
+      if (modelInput.value && !models.includes(modelInput.value)) modelInput.value = "";
+      syncProvider();
+    });
+    syncProvider();
+  }
+
+  const aiTest = $("[data-ai-test]");
+  if (aiTest) aiTest.addEventListener("click", async () => {
+    const box = $("[data-ai-status]");
+    aiTest.disabled = true;
+    box.className = "gen-status running";
+    box.innerHTML = '<span class="blob-loader"></span> Отправляю пробный запрос…';
+    try {
+      const res = await post(aiTest.dataset.aiTest);
+      box.className = `gen-status ${res.ok ? "running" : "error"}`;
+      box.textContent = res.ok ? `✓ ${res.message}` : res.error;
+    } catch (err) {
+      box.className = "gen-status error";
+      box.textContent = err.message;
+    } finally {
+      aiTest.disabled = false;
+    }
+  });
+
   // ---------- Журнал: обновление идущего запуска ----------
   if ($("[data-autorefresh]")) setTimeout(() => location.reload(), 3000);
 })();

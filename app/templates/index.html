@@ -12,10 +12,10 @@
 </div>
 
 <div class="tiles">
-  <a class="tile {{ 'selected' if not f.status and f.archive != '1' and not f.publish }}" href="{{ filter_url(f, status='', archive='', publish='') }}">
+  <a class="tile {{ 'selected' if f.status == 'all' and f.archive != '1' and not f.publish }}" href="{{ filter_url(f, status='all', archive='', publish='') }}">
     {{ ic.icon("total") }}<span class="lbl">Всего новостей</span><span class="num">{{ stats.total }}</span>
   </a>
-  <a class="tile {{ 'selected' if f.status == 'work' }}" href="{{ filter_url(f, status='work', archive='', publish='') }}">
+  <a class="tile {{ 'selected' if f.status == 'work' and f.archive != '1' and not f.publish }}" href="{{ filter_url(f, status='work', archive='', publish='') }}">
     {{ ic.icon("work") }}<span class="lbl">В работе</span><span class="num">{{ stats.new }}</span>
   </a>
   <a class="tile {{ 'selected' if f.status == 'published' }}" href="{{ filter_url(f, status='published', archive='', publish='') }}">
@@ -24,10 +24,10 @@
   <a class="tile {{ 'selected' if f.status == 'postponed' }}" href="{{ filter_url(f, status='postponed', archive='', publish='') }}">
     {{ ic.icon("postponed") }}<span class="lbl">Отложено</span><span class="num">{{ stats.postponed }}</span>
   </a>
-  <a class="tile {{ 'selected' if f.archive == '1' }}" href="{{ filter_url(f, status='', archive='1', publish='') }}">
+  <a class="tile {{ 'selected' if f.archive == '1' }}" href="{{ filter_url(f, status='all', archive='1', publish='') }}">
     {{ ic.icon("archive") }}<span class="lbl">В архиве</span><span class="num">{{ stats.archived }}</span>
   </a>
-  <a class="tile t-due {{ 'selected' if f.publish == 'today' }}" href="{{ filter_url(f, status='', archive='', publish='today', period='all') }}">
+  <a class="tile t-due {{ 'selected' if f.publish == 'today' }}" href="{{ filter_url(f, status='all', archive='', publish='today', period='all') }}">
     {{ ic.icon("due") }}<span class="lbl">Опубликовать сегодня</span><span class="num">{{ stats.due }}</span>
   </a>
 </div>
@@ -74,7 +74,7 @@
     <div>
       <label for="status">Статус</label>
       <select id="status" name="status" data-autosubmit>
-        <option value="">Все</option>
+        <option value="all" {{ 'selected' if f.status == 'all' }}>Все</option>
         <option value="work" {{ 'selected' if f.status == 'work' }}>В работе</option>
         {% for key, label in statuses.items() %}
           <option value="{{ key }}" {{ 'selected' if f.status == key }}>{{ label }}</option>
@@ -131,7 +131,7 @@
           <td class="title">
             <a href="{{ url('/news/' ~ n.id) }}">{{ n.title }}</a>
             <div class="sub">
-              {{ n.source.name if n.source else 'Вручную' }}
+              {{ n.source_name }}
               {% if n.is_duplicate %} · <span class="chip dup">дубль</span>{% endif %}
             </div>
           </td>

@@ -56,4 +56,6 @@ def redirect(path: str) -> RedirectResponse:
 
 def render(request: Request, name: str, **context):
     context.setdefault("active", "")
+    context.setdefault("user", getattr(request.state, "user", None))
+    context.setdefault("theme", getattr(request.state, "theme", "auto"))
     return templates.TemplateResponse(request, name, {"flashes": pop_flash(request), "today": date.today(), **context})

@@ -9,13 +9,22 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import require_user
 from ..db import get_db
 from ..models import News, NewsHistory, NewsImage, NewsStatus, NewsVersion, Prompt, now
-from ..services import generator
+from ..services import ai, generator
 from ..services.images import ImageError, media_path, remove_files, save_image
 from ..services.parser import executor
 from ..web import flash, redirect, render
 
 router = APIRouter()
 MAX_UPLOAD = 25 * 1024 * 1024  # 25 МБ на файл
+
+
+def _ai_error(db: Session, user) -> str:
+    """Пустая строка — нейросеть настроена; иначе — что нужно сделать."""
+    try:
+        ai.user_config(db, user)
+        return ""
+    except ai.AIError as e:
+        return str(e)
 
 
 def _parse_date(value: str) -> date | None:
@@ -32,9 +41,10 @@ def _parse_datetime(value: str) -> datetime | None:
         return None
 
 
-def _get(db: Session, news_id: int) -> News:
+def _get(db: Session, news_id: int, user_id: int) -> News:
+    """Новость текущего пользователя. Чужая запись выглядит так же, как несуществующая."""
     news = db.get(News, news_id, options=[selectinload(News.images), selectinload(News.source)])
-    if not news:
+    if not news or news.user_id != user_id:
         raise HTTPException(404, "Запись не найдена")
     return news
 
@@ -75,6 +85,7 @@ async def create(
     db: Session = Depends(get_db),
 ):
     news = News(
+        user_id=user_id,
         title=title.strip()[:1000] or "Без заголовка",
         created_at=_parse_datetime(created_at) or now(),
         original_text=original_text,
@@ -95,12 +106,13 @@ async def create(
 
 @router.get("/news/{news_id}")
 def card(request: Request, news_id: int, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
-    news = _get(db, news_id)
-    prompts = db.scalars(select(Prompt).order_by(Prompt.is_default.desc(), Prompt.name)).all()
+    news = _get(db, news_id, user_id)
+    prompts = db.scalars(select(Prompt).where(Prompt.user_id == user_id)
+                         .order_by(Prompt.is_default.desc(), Prompt.name)).all()
     return render(
         request, "news_card.html", active="registry", news=news, prompts=prompts,
         statuses=NewsStatus.LABELS, versions=news.versions[:20], history=news.history[:50],
-        ai_ready=generator.is_configured(),
+        ai_error=_ai_error(db, request.state.user),
     )
 
 
@@ -117,7 +129,7 @@ def save(
     user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
-    news = _get(db, news_id)
+    news = _get(db, news_id, user_id)
     changes = []
     new_values = {
         "title": (title.strip()[:1000] or news.title, "заголовок"),
@@ -159,7 +171,7 @@ ACTIONS = {
 @router.post("/news/{news_id}/action")
 def action(request: Request, news_id: int, action: str = Form(...), user_id: int = Depends(require_user),
            db: Session = Depends(get_db)):
-    news = _get(db, news_id)
+    news = _get(db, news_id, user_id)
     if action not in ACTIONS:
         raise HTTPException(400, "Неизвестное действие")
     if action == "publish":
@@ -191,7 +203,7 @@ QUICK_STATUSES = {**NewsStatus.LABELS, "archive": "В архив", "unarchive": 
 def quick_update(news_id: int, status: str | None = Form(None), planned_publish_date: str | None = Form(None),
                  user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     """Изменение статуса или плановой даты прямо из реестра (без перехода в карточку)."""
-    news = _get(db, news_id)
+    news = _get(db, news_id, user_id)
     if status is not None:
         if status not in QUICK_STATUSES:
             return JSONResponse({"ok": False, "error": "Неизвестный статус"}, 400)
@@ -227,7 +239,7 @@ def quick_update(news_id: int, status: str | None = Form(None), planned_publish_
 @router.post("/news/{news_id}/images")
 async def upload_images(request: Request, news_id: int, images: list[UploadFile] = File(default=[]),
                         user_id: int = Depends(require_user), db: Session = Depends(get_db)):
-    news = _get(db, news_id)
+    news = _get(db, news_id, user_id)
     errors = await _store_uploads(db, news, images)
     db.add(NewsHistory(news_id=news.id, action="Добавлены картинки"))
     db.commit()
@@ -239,6 +251,7 @@ async def upload_images(request: Request, news_id: int, images: list[UploadFile]
 @router.post("/news/{news_id}/images/{image_id}/delete")
 def delete_image(request: Request, news_id: int, image_id: int, user_id: int = Depends(require_user),
                  db: Session = Depends(get_db)):
+    _get(db, news_id, user_id)
     img = db.get(NewsImage, image_id)
     if not img or img.news_id != news_id:
         raise HTTPException(404)
@@ -253,7 +266,7 @@ def delete_image(request: Request, news_id: int, image_id: int, user_id: int = D
 @router.get("/media/{image_id}/{kind}")
 def media(image_id: int, kind: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     img = db.get(NewsImage, image_id)
-    if not img or kind not in ("thumb", "original"):
+    if not img or kind not in ("thumb", "original") or img.news.user_id != user_id:
         raise HTTPException(404)
     if kind == "thumb":
         return FileResponse(media_path(img.thumb_filename), headers={"Cache-Control": "private, max-age=86400"})
@@ -261,12 +274,14 @@ def media(image_id: int, kind: str, user_id: int = Depends(require_user), db: Se
 
 
 @router.post("/news/{news_id}/generate")
-def generate(news_id: int, prompt_id: int = Form(...), user_id: int = Depends(require_user),
+def generate(request: Request, news_id: int, prompt_id: int = Form(...), user_id: int = Depends(require_user),
              db: Session = Depends(get_db)):
-    news = _get(db, news_id)
-    if not generator.is_configured():
-        return JSONResponse({"ok": False, "error": "Не задан ключ DEEPSEEK_API_KEY в файле .env на сервере"}, 400)
-    if not db.get(Prompt, prompt_id):
+    news = _get(db, news_id, user_id)
+    error = _ai_error(db, request.state.user)
+    if error:
+        return JSONResponse({"ok": False, "error": error}, 400)
+    prompt = db.get(Prompt, prompt_id)
+    if not prompt or prompt.user_id != user_id:
         return JSONResponse({"ok": False, "error": "Промпт не найден"}, 400)
     if not news.original_text.strip():
         return JSONResponse({"ok": False, "error": "Нет текста оригинальной новости — нечего переделывать"}, 400)
@@ -280,7 +295,7 @@ def generate(news_id: int, prompt_id: int = Form(...), user_id: int = Depends(re
 
 @router.get("/news/{news_id}/generation")
 def generation_state(news_id: int, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
-    news = _get(db, news_id)
+    news = _get(db, news_id, user_id)
     return {"state": news.gen_state, "error": news.gen_error, "status": news.status}
 
 
@@ -290,7 +305,7 @@ def restore_version(request: Request, news_id: int, version_id: int, user_id: in
     version = db.get(NewsVersion, version_id)
     if not version or version.news_id != news_id:
         raise HTTPException(404)
-    news = _get(db, news_id)
+    news = _get(db, news_id, user_id)
     news.html_code = version.html_code
     db.add(NewsHistory(news_id=news_id, action=f"Восстановлена версия от {version.created_at:%d.%m.%Y %H:%M}"))
     db.commit()

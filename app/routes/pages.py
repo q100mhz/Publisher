@@ -34,6 +34,9 @@ def login(request: Request, login: str = Form(""), password: str = Form(""), db:
     if not user or not verify_password(password, user.password_hash):
         register_fail(ip)
         return render(request, "login.html", error="Неверный логин или пароль", login=login)
+    if not user.is_active:
+        return render(request, "login.html", error="Учётная запись отключена. Обратитесь к администратору.",
+                      login=login)
     reset_fails(ip)
     request.session.clear()
     request.session["user_id"] = user.id
@@ -56,7 +59,7 @@ def _period_start(period: str) -> datetime | None:
 def index(
     request: Request,
     period: str = "all",
-    status: str = "",
+    status: str | None = None,  # не указан — показываем «в работе»
     source: str = "",
     q: str = "",
     archive: str = "",   # "" — без архива, "1" — только архив
@@ -69,9 +72,12 @@ def index(
     period = period if period in PERIODS else "all"
     start = _period_start(period)
     today = date.today()
+    if status is None:
+        # По умолчанию — новости в работе. В архиве и в «опубликовать сегодня» — все статусы
+        status = "all" if archive == "1" or publish == "today" else "work"
 
     # Дашборд: считается за выбранный период, архив — отдельной плиткой
-    base = select(func.count(News.id))
+    base = select(func.count(News.id)).where(News.user_id == user_id)
     if start:
         base = base.where(News.created_at >= start)
     live = base.where(News.archived.is_(False))
@@ -82,11 +88,12 @@ def index(
         "postponed": db.scalar(live.where(News.status == NewsStatus.POSTPONED)),
         "archived": db.scalar(base.where(News.archived.is_(True))),
         "due": db.scalar(select(func.count(News.id)).where(
-            News.archived.is_(False), News.status != NewsStatus.PUBLISHED,
+            News.user_id == user_id, News.archived.is_(False), News.status != NewsStatus.PUBLISHED,
             News.planned_publish_date.is_not(None), News.planned_publish_date <= today)),
     }
 
-    query = select(News).options(selectinload(News.source), selectinload(News.images))
+    query = (select(News).options(selectinload(News.source), selectinload(News.images))
+             .where(News.user_id == user_id))
     if start:
         query = query.where(News.created_at >= start)
     query = query.where(News.archived.is_(archive == "1"))
@@ -113,14 +120,14 @@ def index(
     items = db.scalars(query.order_by(News.created_at.desc(), News.id.asc())
                        .offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)).all()
 
-    last_run = db.scalar(select(ParserRun).order_by(ParserRun.id.desc()).limit(1))
+    last_run = db.scalar(select(ParserRun).where(ParserRun.user_id == user_id).order_by(ParserRun.id.desc()).limit(1))
     filters = dict(period=period, status=status, source=source, q=q, archive=archive, dup=dup, publish=publish)
     return render(
         request, "index.html", active="registry", stats=stats, items=items, total=total, page=page,
         pages=pages, filters=filters, periods=PERIODS, statuses=NewsStatus.LABELS,
-        sources=db.scalars(select(Source).order_by(Source.name)).all(), last_run=last_run,
-        auto_enabled=scheduler.is_enabled(), next_run=scheduler.next_run_time(),
-        running=db.scalar(select(func.count(Source.id)).where(Source.is_running.is_(True))),
+        sources=db.scalars(select(Source).where(Source.user_id == user_id).order_by(Source.name)).all(),
+        last_run=last_run, auto_enabled=scheduler.is_enabled(user_id), next_run=scheduler.next_run_time(user_id),
+        running=db.scalar(select(func.count(Source.id)).where(Source.user_id == user_id, Source.is_running.is_(True))),
     )
 
 
@@ -135,7 +142,7 @@ async def bulk(request: Request, user_id: int = Depends(require_user), db: Sessi
     if not ids:
         flash(request, "Ничего не выбрано", "warn")
         return redirect(back)
-    items = db.scalars(select(News).where(News.id.in_(ids))).all()
+    items = db.scalars(select(News).where(News.id.in_(ids), News.user_id == user_id)).all()
     for item in items:
         if action == "archive" and not item.archived:
             item.archived, item.archived_at = True, now()

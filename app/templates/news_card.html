@@ -1,0 +1,191 @@
+{% extends "base.html" %}
+{% block title %}{{ news.title[:60] }}{% endblock %}
+{% block content %}
+{% set flag = news.publish_flag(today) %}
+<div class="page-head">
+  <div>
+    <a href="{{ url('/') }}" class="small">← Реестр</a>
+    <h1 style="margin-top:6px">Новость № {{ news.id }}</h1>
+  </div>
+  <div class="status-big">
+    <span class="chip s-{{ news.status }}">{{ news.status_label }}</span>
+    {% if news.archived %}<span class="chip archived">В архиве</span>{% endif %}
+    {% if news.is_duplicate %}<span class="chip dup">Дубль</span>{% endif %}
+    {% if flag == 'today' %}<span class="chip today">Опубликовать сегодня</span>{% endif %}
+    {% if flag == 'overdue' %}<span class="chip overdue">Публикация просрочена</span>{% endif %}
+  </div>
+</div>
+
+<div class="news-layout">
+  <div>
+    <form id="news-form" method="post" action="{{ url('/news/' ~ news.id) }}" data-dirty-guard>
+      <div class="card">
+        <div class="field">
+          <label for="title">Заголовок новости</label>
+          <textarea id="title" class="title-input" name="title" rows="2" style="min-height:0" required>{{ news.title }}</textarea>
+        </div>
+        <div class="field-row">
+          <div class="field">
+            <label for="created_at">Дата создания</label>
+            <input id="created_at" type="datetime-local" name="created_at" value="{{ news.created_at.strftime('%Y-%m-%dT%H:%M') }}">
+          </div>
+          <div class="field">
+            <label for="planned">Плановая дата публикации</label>
+            <input id="planned" type="date" name="planned_publish_date" value="{{ news.planned_publish_date.isoformat() if news.planned_publish_date else '' }}">
+          </div>
+          <div class="field">
+            <label for="published">Фактическая дата публикации</label>
+            <input id="published" type="date" name="published_at" value="{{ news.published_at.isoformat() if news.published_at else '' }}">
+          </div>
+        </div>
+      </div>
+
+      <div class="card">
+        <div class="card-head">
+          <h2>Оригинальная новость</h2>
+          {% if news.source_url %}<a class="btn btn-ghost btn-sm" href="{{ news.source_url }}" target="_blank" rel="noopener noreferrer">Открыть оригинал ↗</a>{% endif %}
+        </div>
+        <textarea name="original_text" rows="12" placeholder="Вставьте текст оригинальной новости">{{ news.original_text }}</textarea>
+      </div>
+
+      <div class="card" id="rewrite">
+        <div class="card-head">
+          <h2>Переделанная новость</h2>
+          <div class="tabs" role="tablist">
+            <button type="button" class="on" data-tab="preview">Как увидит читатель</button>
+            <button type="button" data-tab="code">HTML-код</button>
+          </div>
+        </div>
+
+        <div class="gen-bar">
+          <div class="field">
+            <label for="prompt">Промпт</label>
+            <select id="prompt" data-prompt>
+              {% for p in prompts %}<option value="{{ p.id }}">{{ p.name }}{{ ' (основной)' if p.is_default }}</option>{% endfor %}
+            </select>
+          </div>
+          <button type="button" class="btn-lg" data-generate data-url="{{ url('/news/' ~ news.id ~ '/generate') }}"
+                  data-state-url="{{ url('/news/' ~ news.id ~ '/generation') }}" {{ 'disabled' if not ai_ready or news.gen_state == 'running' }}>
+            ✦ {{ 'Сгенерировать заново' if news.html_code else 'Сгенерировать' }}
+          </button>
+          <button type="button" class="btn-lg btn-dark" data-copy>⧉ Скопировать код</button>
+        </div>
+        {% if not ai_ready %}
+          <div class="gen-status error">Ключ DeepSeek не задан: добавьте DEEPSEEK_API_KEY в файл .env на сервере и перезапустите контейнер.</div>
+        {% endif %}
+        <div class="gen-status running {{ 'hidden' if news.gen_state != 'running' }}" data-gen-running>
+          <span class="blob-loader"></span> Нейросеть переписывает статью — обычно это 30–90 секунд. Страницу можно не обновлять.
+        </div>
+        <div class="gen-status error {{ 'hidden' if news.gen_state != 'error' }}" data-gen-error>{{ news.gen_error }}</div>
+
+        <div data-pane="preview">
+          <div class="preview-empty {{ 'hidden' if news.html_code }}" data-preview-empty>Здесь появится статья после генерации. Можно также вставить HTML-код вручную на вкладке «HTML-код».</div>
+          <iframe class="preview-frame {{ 'hidden' if not news.html_code }}" data-preview sandbox="allow-same-origin" title="Предпросмотр статьи"></iframe>
+        </div>
+        <div data-pane="code" class="hidden">
+          <textarea class="code" name="html_code" data-html-code spellcheck="false" placeholder="<h1>Заголовок</h1>…">{{ news.html_code }}</textarea>
+          <p class="hint">Код можно править вручную — предпросмотр обновляется сразу. Не забудьте сохранить.</p>
+        </div>
+      </div>
+
+      <div class="clay savebar">
+        <span class="small muted" data-dirty-note>Изменения сохраняются кнопкой справа</span>
+        <button type="submit" class="btn-lg btn-green">Сохранить</button>
+      </div>
+    </form>
+
+    <div class="card" id="images" style="margin-top:22px">
+      <div class="card-head">
+        <h2>Картинки <span class="muted small">({{ news.images|length }})</span></h2>
+        <span class="small muted">Клик по миниатюре — скачать оригинал</span>
+      </div>
+      {% if news.images %}
+      <div class="gallery">
+        {% for img in news.images %}
+        <div class="img">
+          <a class="thumb" href="{{ url('/media/' ~ img.id ~ '/original') }}" download="{{ img.original_name }}" title="{{ img.original_name }} — {{ img.width }}×{{ img.height }}">
+            <img src="{{ url('/media/' ~ img.id ~ '/thumb') }}" alt="{{ img.original_name }}" loading="lazy">
+          </a>
+          <div class="meta">{{ img.width }}×{{ img.height }}</div>
+          <form method="post" action="{{ url('/news/' ~ news.id ~ '/images/' ~ img.id ~ '/delete') }}">
+            <button class="del btn-red" title="Удалить картинку" data-confirm="Удалить эту картинку?">×</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+      {% endif %}
+      <form method="post" action="{{ url('/news/' ~ news.id ~ '/images') }}" enctype="multipart/form-data" data-upload-form>
+        <label class="dropzone" data-dropzone>
+          <input type="file" name="images" accept="image/*" multiple data-autosubmit-files>
+          <span style="font-size:26px">＋</span>
+          Перетащите картинки сюда или нажмите, чтобы выбрать (можно несколько)
+        </label>
+      </form>
+    </div>
+  </div>
+
+  <aside class="news-side">
+    <div class="card">
+      <h3 style="margin-bottom:14px">Действия</h3>
+      <div class="side-actions">
+        {% if news.status != 'published' %}
+        <form method="post" action="{{ url('/news/' ~ news.id ~ '/action') }}"><input type="hidden" name="action" value="publish">
+          <button class="btn-green">✓ Опубликована</button></form>
+        {% endif %}
+        {% if news.status != 'postponed' %}
+        <form method="post" action="{{ url('/news/' ~ news.id ~ '/action') }}"><input type="hidden" name="action" value="postpone">
+          <button class="btn-yellow">⏳ Отложить</button></form>
+        {% endif %}
+        {% if news.status in ('published', 'postponed') %}
+        <form method="post" action="{{ url('/news/' ~ news.id ~ '/action') }}"><input type="hidden" name="action" value="to_work">
+          <button class="btn-ghost">↺ Вернуть в работу</button></form>
+        {% endif %}
+        <form method="post" action="{{ url('/news/' ~ news.id ~ '/action') }}">
+          <input type="hidden" name="action" value="{{ 'duplicate_off' if news.is_duplicate else 'duplicate_on' }}">
+          <button class="btn-dark">{{ 'Снять отметку «дубль»' if news.is_duplicate else '⧉ Пометить как дубль' }}</button></form>
+        <form method="post" action="{{ url('/news/' ~ news.id ~ '/action') }}">
+          {% if news.archived %}
+            <input type="hidden" name="action" value="unarchive"><button class="btn-ghost">Вернуть из архива</button>
+          {% else %}
+            <input type="hidden" name="action" value="archive"><button class="btn-red" data-confirm="Отправить новость в архив? Её можно будет вернуть.">В архив</button>
+          {% endif %}
+        </form>
+      </div>
+    </div>
+
+    <div class="card">
+      <h3 style="margin-bottom:12px">Сведения</h3>
+      <dl class="kv">
+        <dt>Источник</dt><dd>{{ news.source.name if news.source else 'Создана вручную' }}</dd>
+        {% if news.original_published_at %}<dt>Дата оригинала</dt><dd>{{ news.original_published_at|d }}</dd>{% endif %}
+        <dt>Создана</dt><dd>{{ news.created_at|dt }}</dd>
+        <dt>Изменена</dt><dd>{{ news.updated_at|dt }}</dd>
+        {% if news.archived_at %}<dt>В архиве с</dt><dd>{{ news.archived_at|dt }}</dd>{% endif %}
+      </dl>
+    </div>
+
+    {% if versions %}
+    <div class="card">
+      <h3 style="margin-bottom:12px">Версии генерации</h3>
+      <div class="versions">
+        {% for v in versions %}
+        <div class="v">
+          <div><b>{{ v.created_at|dt }}</b><br><span class="muted">{{ v.prompt_name }}</span></div>
+          <form method="post" action="{{ url('/news/' ~ news.id ~ '/versions/' ~ v.id ~ '/restore') }}">
+            <button class="btn-sm btn-ghost" data-confirm="Заменить текущий HTML-код этой версией?">Вернуть</button>
+          </form>
+        </div>
+        {% endfor %}
+      </div>
+    </div>
+    {% endif %}
+
+    <div class="card">
+      <h3 style="margin-bottom:12px">История</h3>
+      <ul class="timeline">
+        {% for h in history %}<li><div><time>{{ h.created_at|dt }}</time>{{ h.action }}</div></li>{% endfor %}
+      </ul>
+    </div>
+  </aside>
+</div>
+{% endblock %}

@@ -1,0 +1,123 @@
+{# «Пластилиновые» иконки: объём даёт радиальный градиент + мягкая тень + блик. Градиенты — в base.html #}
+
+{% macro clay_defs() %}
+<svg width="0" height="0" style="position:absolute" aria-hidden="true">
+  <defs>
+    {% for id, light, base, deep in [
+      ("orange", "#ffb37a", "#f07a2a", "#c95412"),
+      ("yellow", "#ffe58a", "#f7c531", "#d29c08"),
+      ("red", "#ff8a7d", "#e5483b", "#b52b20"),
+      ("green", "#9be2ae", "#45ad68", "#257a43"),
+      ("dark", "#6b625b", "#2e2925", "#151210"),
+      ("white", "#ffffff", "#f6efe6", "#d8cbbb"),
+      ("violet", "#b9a8ff", "#7a62d6", "#4f3aa8"),
+    ] %}
+    <radialGradient id="g-{{ id }}" cx="32%" cy="28%" r="80%">
+      <stop offset="0" stop-color="{{ light }}"/>
+      <stop offset=".55" stop-color="{{ base }}"/>
+      <stop offset="1" stop-color="{{ deep }}"/>
+    </radialGradient>
+    {% endfor %}
+    <filter id="clay" x="-30%" y="-30%" width="160%" height="170%">
+      <feDropShadow dx="2" dy="4" stdDeviation="3" flood-color="#5a3010" flood-opacity=".28"/>
+    </filter>
+  </defs>
+</svg>
+{% endmacro %}
+
+{% macro logo() %}
+<svg viewBox="0 0 48 48" aria-hidden="true">
+  <g filter="url(#clay)">
+    <circle cx="24" cy="24" r="19" fill="url(#g-yellow)"/>
+    <path d="M18 34 V14 h8 a6.5 6.5 0 0 1 0 13 h-8" fill="none" stroke="url(#g-dark)" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="35" cy="34" r="4.5" fill="url(#g-red)"/>
+  </g>
+  <ellipse cx="17" cy="13" rx="5" ry="2.6" fill="#fff" opacity=".55" transform="rotate(-30 17 13)"/>
+</svg>
+{% endmacro %}
+
+{% macro icon(name) %}
+<svg viewBox="0 0 64 64" aria-hidden="true">
+<g filter="url(#clay)">
+{% if name == "total" %}
+  <rect x="14" y="20" width="38" height="32" rx="8" fill="url(#g-red)" transform="rotate(8 33 36)"/>
+  <rect x="11" y="15" width="38" height="32" rx="8" fill="url(#g-yellow)" transform="rotate(-5 30 31)"/>
+  <rect x="12" y="12" width="38" height="32" rx="8" fill="url(#g-white)"/>
+  <rect x="18" y="19" width="20" height="5" rx="2.5" fill="url(#g-orange)"/>
+  <rect x="18" y="28" width="26" height="4" rx="2" fill="url(#g-dark)" opacity=".75"/>
+  <rect x="18" y="35" width="18" height="4" rx="2" fill="url(#g-dark)" opacity=".75"/>
+{% elif name == "work" %}
+  <rect x="26" y="6" width="13" height="40" rx="5" fill="url(#g-red)" transform="rotate(35 32 32)"/>
+  <path d="M15 47 l3 -10 l9 6 z" fill="url(#g-yellow)"/>
+  <circle cx="14.5" cy="48.5" r="2.6" fill="url(#g-dark)"/>
+  <rect x="38" y="4" width="13" height="8" rx="4" fill="url(#g-orange)" transform="rotate(35 44 8)"/>
+{% elif name == "published" %}
+  <circle cx="32" cy="33" r="23" fill="url(#g-green)"/>
+  <path d="M21 33 l8 8 l14 -16" fill="none" stroke="#fff" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+{% elif name == "postponed" %}
+  <rect x="14" y="8" width="36" height="8" rx="4" fill="url(#g-dark)"/>
+  <rect x="14" y="48" width="36" height="8" rx="4" fill="url(#g-dark)"/>
+  <path d="M19 16 h26 c0 10 -9 12 -9 16 s9 6 9 16 h-26 c0 -10 9 -12 9 -16 s-9 -6 -9 -16z" fill="url(#g-yellow)"/>
+  <path d="M25 46 c2 -5 5 -6 7 -9 c2 3 5 4 7 9z" fill="url(#g-orange)"/>
+{% elif name == "archive" %}
+  <rect x="10" y="12" width="44" height="13" rx="6" fill="url(#g-dark)"/>
+  <rect x="13" y="24" width="38" height="28" rx="7" fill="url(#g-dark)"/>
+  <rect x="24" y="31" width="16" height="7" rx="3.5" fill="url(#g-orange)"/>
+{% elif name == "due" %}
+  <rect x="10" y="14" width="44" height="40" rx="10" fill="url(#g-white)"/>
+  <path d="M10 24 a10 10 0 0 1 10 -10 h24 a10 10 0 0 1 10 10 v4 h-44z" fill="url(#g-red)"/>
+  <rect x="19" y="8" width="6" height="13" rx="3" fill="url(#g-dark)"/>
+  <rect x="39" y="8" width="6" height="13" rx="3" fill="url(#g-dark)"/>
+  <rect x="29" y="31" width="6" height="12" rx="3" fill="url(#g-orange)"/>
+  <circle cx="32" cy="48" r="3.4" fill="url(#g-orange)"/>
+{% endif %}
+</g>
+</svg>
+{% endmacro %}
+
+{% macro login_art() %}
+<svg viewBox="0 0 360 300" aria-hidden="true">
+  <ellipse cx="180" cy="268" rx="120" ry="14" fill="#000" opacity=".1"/>
+  <ellipse cx="180" cy="160" rx="150" ry="112" fill="none" stroke="#2e2925" stroke-width="7" stroke-linecap="round" stroke-dasharray="1 22"/>
+  <g filter="url(#clay)">
+    <rect x="148" y="78" width="64" height="26" rx="13" fill="none" stroke="url(#g-dark)" stroke-width="10"/>
+    <rect x="92" y="96" width="176" height="150" rx="26" fill="url(#g-orange)"/>
+    <rect x="124" y="96" width="18" height="150" rx="6" fill="url(#g-dark)"/>
+    <rect x="218" y="96" width="18" height="150" rx="6" fill="url(#g-dark)"/>
+    <rect x="160" y="140" width="40" height="52" rx="8" fill="url(#g-white)"/>
+    <rect x="167" y="150" width="26" height="5" rx="2.5" fill="url(#g-red)"/>
+    <rect x="167" y="161" width="20" height="4" rx="2" fill="url(#g-dark)" opacity=".7"/>
+    <rect x="167" y="171" width="24" height="4" rx="2" fill="url(#g-dark)" opacity=".7"/>
+  </g>
+  <g filter="url(#clay)" transform="translate(236 30) rotate(-14)">
+    <path d="M0 30 L86 0 L56 62 L40 40 Z" fill="url(#g-red)"/>
+    <path d="M40 40 L86 0 L30 50 Z" fill="#b52b20" opacity=".55"/>
+  </g>
+  <ellipse cx="128" cy="116" rx="14" ry="6" fill="#fff" opacity=".45" transform="rotate(-20 128 116)"/>
+</svg>
+{% endmacro %}
+
+{% macro empty_art() %}
+<svg viewBox="0 0 160 120" aria-hidden="true">
+  <ellipse cx="80" cy="108" rx="54" ry="7" fill="#000" opacity=".08"/>
+  <g filter="url(#clay)">
+    <rect x="30" y="28" width="100" height="72" rx="16" fill="url(#g-yellow)"/>
+    <path d="M30 44 l50 30 l50 -30" fill="none" stroke="url(#g-dark)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <circle cx="124" cy="30" r="13" fill="url(#g-red)"/>
+  </g>
+  <text x="124" y="35" text-anchor="middle" font-family="Oswald, sans-serif" font-size="15" font-weight="700" fill="#fff">0</text>
+</svg>
+{% endmacro %}
+
+{% macro clock_art() %}
+<svg class="ill" viewBox="0 0 120 100" aria-hidden="true">
+  <g filter="url(#clay)">
+    <circle cx="56" cy="52" r="38" fill="url(#g-white)"/>
+    <circle cx="56" cy="52" r="30" fill="url(#g-yellow)"/>
+    <path d="M56 32 v20 l12 8" fill="none" stroke="url(#g-dark)" stroke-width="7" stroke-linecap="round" stroke-linejoin="round"/>
+    <path d="M96 22 a46 46 0 0 1 4 40" fill="none" stroke="url(#g-orange)" stroke-width="8" stroke-linecap="round"/>
+    <path d="M92 56 l9 10 l8 -12z" fill="url(#g-orange)"/>
+  </g>
+  <text x="56" y="96" text-anchor="middle" font-family="Oswald, sans-serif" font-size="12" font-weight="700" fill="#d4611a">4 ЧАСА</text>
+</svg>
+{% endmacro %}

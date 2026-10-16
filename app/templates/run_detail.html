@@ -1,0 +1,19 @@
+{% extends "base.html" %}
+{% block title %}Запуск парсера{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a href="{{ url('/runs') }}" class="small">← Журнал</a>
+    <h1 style="margin-top:6px">Запуск от {{ run.started_at|dt }}</h1>
+  </div>
+  <div class="status-big">
+    <span class="chip light">{{ run.source.name if run.source else '—' }}</span>
+    <span class="chip light">{{ 'Авто' if run.trigger == 'auto' else 'Вручную' }}</span>
+    <span class="chip light">найдено {{ run.found }}</span>
+    <span class="chip s-published">добавлено {{ run.added }}</span>
+  </div>
+</div>
+<div class="card">
+  <pre class="log" {% if run.status == 'running' %}data-autorefresh{% endif %}>{{ run.log or 'Лог пуст' }}</pre>
+</div>
+{% endblock %}

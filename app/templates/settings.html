@@ -1,0 +1,36 @@
+{% extends "base.html" %}
+{% block title %}Настройки{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Настройки</h1></div>
+<div class="field-row" style="align-items:start;gap:24px">
+  <div class="card">
+    <h2 style="margin-bottom:14px">Генерация (DeepSeek)</h2>
+    <p>Ключ API: {% if ai_ready %}<span class="chip s-published">задан</span>{% else %}<span class="chip overdue">не задан</span>{% endif %}</p>
+    <p class="hint" style="margin-top:-6px">Ключ хранится только на сервере, в файле <code>.env</code> (переменная <code>DEEPSEEK_API_KEY</code>), и в браузер не передаётся.</p>
+    <form method="post" action="{{ url('/settings/ai') }}">
+      <div class="field">
+        <label for="model">Модель</label>
+        <input id="model" type="text" name="model" value="{{ model }}" list="models">
+        <datalist id="models"><option value="deepseek-chat"><option value="deepseek-reasoner"></datalist>
+        <p class="hint"><code>deepseek-chat</code> — быстрая и дешёвая, <code>deepseek-reasoner</code> — «думающая», медленнее.</p>
+      </div>
+      <div class="field">
+        <label for="temp">Температура (0–2)</label>
+        <input id="temp" type="number" step="0.1" min="0" max="2" name="temperature" value="{{ temperature }}">
+        <p class="hint">Выше — креативнее, ниже — ближе к оригиналу. Для переписывания статей DeepSeek рекомендует 1.0–1.3.</p>
+      </div>
+      <button type="submit">Сохранить</button>
+    </form>
+  </div>
+
+  <div class="card">
+    <h2 style="margin-bottom:14px">Смена пароля</h2>
+    <form method="post" action="{{ url('/settings/password') }}">
+      <div class="field"><label for="cur">Текущий пароль</label><input id="cur" type="password" name="current" autocomplete="current-password" required></div>
+      <div class="field"><label for="new">Новый пароль</label><input id="new" type="password" name="new" autocomplete="new-password" minlength="8" required></div>
+      <div class="field"><label for="rep">Повторите</label><input id="rep" type="password" name="repeat" autocomplete="new-password" minlength="8" required></div>
+      <button type="submit">Сменить пароль</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+{% block title %}Журнал парсера{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Журнал парсера</h1>
+  <form method="get" action="{{ url('/runs') }}">
+    <select name="source" data-autosubmit aria-label="Источник">
+      <option value="">Все источники</option>
+      {% for s in sources %}<option value="{{ s.id }}" {{ 'selected' if source_filter == s.id }}>{{ s.name }}</option>{% endfor %}
+    </select>
+  </form>
+</div>
+<div class="card">
+  {% if runs %}
+  <div class="table-wrap">
+  <table class="registry">
+    <thead><tr><th>Запуск</th><th>Источник</th><th>Режим</th><th>Найдено</th><th>Добавлено</th><th>Пропущено</th><th>Итог</th></tr></thead>
+    <tbody>
+    {% for r in runs %}
+      <tr>
+        <td class="nowrap"><a href="{{ url('/runs/' ~ r.id) }}">{{ r.started_at|dt }}</a></td>
+        <td>{{ r.source.name if r.source else '—' }}</td>
+        <td>{{ 'Авто' if r.trigger == 'auto' else 'Вручную' }}</td>
+        <td>{{ r.found }}</td>
+        <td><b>{{ r.added }}</b></td>
+        <td>{{ r.skipped }}</td>
+        <td>{% if r.status == 'running' %}<span class="dot running"></span> идёт{% elif r.status == 'error' %}<span class="chip overdue">ошибка</span>{% else %}<span class="chip s-published">ок</span>{% endif %}</td>
+      </tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  {% else %}
+  <div class="empty">{{ ic.empty_art() }}<h3>Запусков ещё не было</h3></div>
+  {% endif %}
+</div>
+{% endblock %}

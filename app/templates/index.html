@@ -1,0 +1,196 @@
+{% extends "base.html" %}
+{% block title %}Реестр{% endblock %}
+{% block content %}
+{% set f = filters %}
+<div class="page-head">
+  <h1>Дашборд</h1>
+  <div class="period-tabs">
+    {% for key, label in periods.items() %}
+      <a href="{{ filter_url(f, period=key) }}" class="{{ 'on' if f.period == key }}">{{ label }}</a>
+    {% endfor %}
+  </div>
+</div>
+
+<div class="tiles">
+  <a class="tile {{ 'selected' if not f.status and f.archive != '1' and not f.publish }}" href="{{ filter_url(f, status='', archive='', publish='') }}">
+    {{ ic.icon("total") }}<span class="lbl">Всего новостей</span><span class="num">{{ stats.total }}</span>
+  </a>
+  <a class="tile {{ 'selected' if f.status == 'work' }}" href="{{ filter_url(f, status='work', archive='', publish='') }}">
+    {{ ic.icon("work") }}<span class="lbl">В работе</span><span class="num">{{ stats.new }}</span>
+  </a>
+  <a class="tile {{ 'selected' if f.status == 'published' }}" href="{{ filter_url(f, status='published', archive='', publish='') }}">
+    {{ ic.icon("published") }}<span class="lbl">Опубликовано</span><span class="num">{{ stats.published }}</span>
+  </a>
+  <a class="tile {{ 'selected' if f.status == 'postponed' }}" href="{{ filter_url(f, status='postponed', archive='', publish='') }}">
+    {{ ic.icon("postponed") }}<span class="lbl">Отложено</span><span class="num">{{ stats.postponed }}</span>
+  </a>
+  <a class="tile {{ 'selected' if f.archive == '1' }}" href="{{ filter_url(f, status='', archive='1', publish='') }}">
+    {{ ic.icon("archive") }}<span class="lbl">В архиве</span><span class="num">{{ stats.archived }}</span>
+  </a>
+  <a class="tile t-due {{ 'selected' if f.publish == 'today' }}" href="{{ filter_url(f, status='', archive='', publish='today', period='all') }}">
+    {{ ic.icon("due") }}<span class="lbl">Опубликовать сегодня</span><span class="num">{{ stats.due }}</span>
+  </a>
+</div>
+
+<div class="clay parser-strip" data-parser-strip>
+  <form method="post" action="{{ url('/auto') }}">
+    <input type="hidden" name="enabled" value="{{ '0' if auto_enabled else '1' }}">
+    <input type="hidden" name="back" value="/">
+    <button type="submit" class="switch {{ 'on' if auto_enabled }}" title="Рубильник автопарсинга">
+      <span class="track"><span class="knob"></span></span>
+      Автопарсинг {{ 'включён' if auto_enabled else 'выключен' }}
+    </button>
+  </form>
+  <div class="grow small">
+    {% if running %}
+      <span class="dot running"></span> Сейчас парсится сайтов: <b>{{ running }}</b>
+    {% elif auto_enabled and next_run %}
+      Следующий обход: <b>{{ next_run|dt }}</b>
+    {% else %}
+      <span class="muted">Включите рубильник или запустите сайт вручную в справочнике</span>
+    {% endif %}
+    {% if last_run %}
+      <br><span class="muted">Последний запуск: {{ last_run.started_at|dt }} —
+        {% if last_run.source %}{{ last_run.source.name }}, {% endif %}добавлено {{ last_run.added }}</span>
+    {% endif %}
+  </div>
+  <a class="btn btn-ghost btn-sm" href="{{ url('/sources') }}">Источники</a>
+  <a class="btn btn-ghost btn-sm" href="{{ url('/runs') }}">Журнал</a>
+</div>
+
+<div class="card">
+  <div class="card-head">
+    <h2>Реестр публикаций {% if f.archive == '1' %}<span class="chip archived">архив</span>{% endif %}</h2>
+    <a class="btn" href="{{ url('/news/new') }}">+ Добавить новость</a>
+  </div>
+
+  <form class="filters" method="get" action="{{ url('/') }}">
+    <input type="hidden" name="period" value="{{ f.period }}">
+    <input type="hidden" name="publish" value="{{ f.publish }}">
+    <div class="q">
+      <label for="q">Поиск</label>
+      <input id="q" type="search" name="q" value="{{ f.q }}" placeholder="Заголовок или текст">
+    </div>
+    <div>
+      <label for="status">Статус</label>
+      <select id="status" name="status" data-autosubmit>
+        <option value="">Все</option>
+        <option value="work" {{ 'selected' if f.status == 'work' }}>В работе</option>
+        {% for key, label in statuses.items() %}
+          <option value="{{ key }}" {{ 'selected' if f.status == key }}>{{ label }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="source">Источник</label>
+      <select id="source" name="source" data-autosubmit>
+        <option value="">Все</option>
+        <option value="manual" {{ 'selected' if f.source == 'manual' }}>Созданы вручную</option>
+        {% for s in sources %}
+          <option value="{{ s.id }}" {{ 'selected' if f.source == s.id|string }}>{{ s.name }}</option>
+        {% endfor %}
+      </select>
+    </div>
+    <div>
+      <label for="dup">Дубли</label>
+      <select id="dup" name="dup" data-autosubmit>
+        <option value="">Все</option>
+        <option value="0" {{ 'selected' if f.dup == '0' }}>Без дублей</option>
+        <option value="1" {{ 'selected' if f.dup == '1' }}>Только дубли</option>
+      </select>
+    </div>
+    <label class="check"><input type="checkbox" name="archive" value="1" {{ 'checked' if f.archive == '1' }} data-autosubmit> Архив</label>
+    <button type="submit">Найти</button>
+  </form>
+
+  {% if f.publish == 'today' %}
+    <p class="small"><span class="chip today">Фильтр</span> Новости с плановой датой публикации сегодня или раньше, ещё не опубликованные.
+      <a href="{{ filter_url(f, publish='') }}">Сбросить</a></p>
+  {% endif %}
+
+  {% if items %}
+  <form method="post" action="{{ url('/news/bulk') }}" data-bulk-form>
+    <input type="hidden" name="back" value="{{ request.url.path[BASE_PATH|length:] }}{{ '?' ~ request.url.query if request.url.query }}">
+    <div class="table-wrap">
+    <table class="registry">
+      <thead>
+        <tr>
+          <th style="width:36px"><input type="checkbox" data-check-all aria-label="Выбрать все"></th>
+          <th>Новость</th>
+          <th class="col-hide">Картинки</th>
+          <th>Статус</th>
+          <th class="col-hide">Создана</th>
+          <th>Публикация</th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for n in items %}
+        {% set flag = n.publish_flag(today) %}
+        <tr class="{{ 'flag-' ~ flag if flag }} {{ 'is-dup' if n.is_duplicate }}">
+          <td><input type="checkbox" name="ids" value="{{ n.id }}" aria-label="Выбрать"></td>
+          <td class="title">
+            <a href="{{ url('/news/' ~ n.id) }}">{{ n.title }}</a>
+            <div class="sub">
+              {{ n.source.name if n.source else 'Вручную' }}
+              {% if n.is_duplicate %} · <span class="chip dup">дубль</span>{% endif %}
+            </div>
+          </td>
+          <td class="col-hide">
+            <div class="thumbs">
+              {% for img in n.images[:3] %}<img src="{{ url('/media/' ~ img.id ~ '/thumb') }}" alt="" loading="lazy">{% endfor %}
+              {% if n.images|length > 3 %}<span class="small muted" style="margin-left:6px;align-self:center">+{{ n.images|length - 3 }}</span>{% endif %}
+            </div>
+          </td>
+          <td>
+            <span class="chip s-{{ n.status }}">{{ n.status_label }}</span>
+            {% if n.archived %}<span class="chip archived">архив</span>{% endif %}
+            {% if n.gen_state == 'running' %}<span class="chip light">генерация…</span>{% endif %}
+          </td>
+          <td class="col-hide nowrap small">{{ n.created_at|dt }}</td>
+          <td class="nowrap small">
+            {% if n.published_at %}
+              ✓ {{ n.published_at|d }}
+            {% elif n.planned_publish_date %}
+              {% if flag == 'today' %}<span class="chip today">Сегодня</span>
+              {% elif flag == 'overdue' %}<span class="chip overdue">Просрочено</span> {{ n.planned_publish_date|d }}
+              {% else %}план {{ n.planned_publish_date|d }}{% endif %}
+            {% else %}<span class="muted">—</span>{% endif %}
+          </td>
+        </tr>
+      {% endfor %}
+      </tbody>
+    </table>
+    </div>
+
+    <div class="clay bulkbar hidden" data-bulkbar>
+      <b>Выбрано: <span data-bulk-count>0</span></b>
+      {% if f.archive == '1' %}
+        <button class="btn-sm btn-green" name="action" value="unarchive">Вернуть из архива</button>
+      {% else %}
+        <button class="btn-sm btn-yellow" name="action" value="postpone">Отложить</button>
+        <button class="btn-sm btn-dark" name="action" value="duplicate">Пометить дублем</button>
+        <button class="btn-sm btn-red" name="action" value="archive" data-confirm="Отправить выбранные новости в архив?">В архив</button>
+      {% endif %}
+    </div>
+  </form>
+
+  {% if pages > 1 %}
+  <nav class="pager">
+    {% for p in range(1, pages + 1) %}
+      {% if p == page %}<span class="on">{{ p }}</span>
+      {% elif p == 1 or p == pages or (p - page)|abs <= 2 %}<a href="{{ filter_url(f, page=p) }}">{{ p }}</a>
+      {% elif (p - page)|abs == 3 %}<span>…</span>{% endif %}
+    {% endfor %}
+  </nav>
+  {% endif %}
+  <p class="small muted" style="text-align:center;margin:14px 0 0">Найдено записей: {{ total }}.
+    <span class="chip today">жёлтым</span> — опубликовать сегодня, <span class="chip overdue">красным</span> — плановая дата прошла.</p>
+  {% else %}
+  <div class="empty">
+    {{ ic.empty_art() }}
+    <h3>Записей нет</h3>
+    <p class="muted">Добавьте сайты в справочник и запустите парсер — или создайте новость вручную.</p>
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

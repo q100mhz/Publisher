@@ -1,0 +1,258 @@
+"""Карточка новости: создание, редактирование, статусы, картинки, генерация."""
+from datetime import date, datetime
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi.responses import FileResponse, JSONResponse
+from sqlalchemy import select
+from sqlalchemy.orm import Session, selectinload
+
+from ..auth import require_user
+from ..db import get_db
+from ..models import News, NewsHistory, NewsImage, NewsStatus, NewsVersion, Prompt, now
+from ..services import generator
+from ..services.images import ImageError, media_path, remove_files, save_image
+from ..services.parser import executor
+from ..web import flash, redirect, render
+
+router = APIRouter()
+MAX_UPLOAD = 25 * 1024 * 1024  # 25 МБ на файл
+
+
+def _parse_date(value: str) -> date | None:
+    try:
+        return date.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
+def _parse_datetime(value: str) -> datetime | None:
+    try:
+        return datetime.fromisoformat(value) if value else None
+    except ValueError:
+        return None
+
+
+def _get(db: Session, news_id: int) -> News:
+    news = db.get(News, news_id, options=[selectinload(News.images), selectinload(News.source)])
+    if not news:
+        raise HTTPException(404, "Запись не найдена")
+    return news
+
+
+async def _store_uploads(db: Session, news: News, files: list[UploadFile]) -> list[str]:
+    errors = []
+    for f in files:
+        if not f or not f.filename:
+            continue
+        data = await f.read(MAX_UPLOAD + 1)
+        if len(data) > MAX_UPLOAD:
+            errors.append(f"«{f.filename}» больше 25 МБ")
+            continue
+        try:
+            info = save_image(data, f.filename)
+        except ImageError as e:
+            errors.append(str(e))
+            continue
+        db.add(NewsImage(news_id=news.id, **info))
+    return errors
+
+
+@router.get("/news/new")
+def new_form(request: Request, user_id: int = Depends(require_user)):
+    return render(request, "news_new.html", active="registry", now=now())
+
+
+@router.post("/news/new")
+async def create(
+    request: Request,
+    title: str = Form(...),
+    created_at: str = Form(""),
+    original_text: str = Form(""),
+    html_code: str = Form(""),
+    planned_publish_date: str = Form(""),
+    images: list[UploadFile] = File(default=[]),
+    user_id: int = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    news = News(
+        title=title.strip()[:1000] or "Без заголовка",
+        created_at=_parse_datetime(created_at) or now(),
+        original_text=original_text,
+        html_code=html_code,
+        status=NewsStatus.GENERATED if html_code.strip() else NewsStatus.NEW,
+        planned_publish_date=_parse_date(planned_publish_date),
+        origin="manual",
+    )
+    db.add(news)
+    db.flush()
+    db.add(NewsHistory(news_id=news.id, action="Создана вручную"))
+    for err in await _store_uploads(db, news, images):
+        flash(request, err, "warn")
+    db.commit()
+    flash(request, "Новость добавлена в реестр")
+    return redirect(f"/news/{news.id}")
+
+
+@router.get("/news/{news_id}")
+def card(request: Request, news_id: int, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    news = _get(db, news_id)
+    prompts = db.scalars(select(Prompt).order_by(Prompt.is_default.desc(), Prompt.name)).all()
+    return render(
+        request, "news_card.html", active="registry", news=news, prompts=prompts,
+        statuses=NewsStatus.LABELS, versions=news.versions[:20], history=news.history[:50],
+        ai_ready=generator.is_configured(),
+    )
+
+
+@router.post("/news/{news_id}")
+def save(
+    request: Request,
+    news_id: int,
+    title: str = Form(...),
+    created_at: str = Form(""),
+    original_text: str = Form(""),
+    html_code: str = Form(""),
+    planned_publish_date: str = Form(""),
+    published_at: str = Form(""),
+    user_id: int = Depends(require_user),
+    db: Session = Depends(get_db),
+):
+    news = _get(db, news_id)
+    changes = []
+    new_values = {
+        "title": (title.strip()[:1000] or news.title, "заголовок"),
+        "created_at": (_parse_datetime(created_at) or news.created_at, "дата создания"),
+        "original_text": (original_text, "текст оригинала"),
+        "html_code": (html_code, "HTML-код"),
+        "planned_publish_date": (_parse_date(planned_publish_date), "плановая дата публикации"),
+        "published_at": (_parse_date(published_at), "фактическая дата публикации"),
+    }
+    for field, (value, label) in new_values.items():
+        if getattr(news, field) != value:
+            setattr(news, field, value)
+            changes.append(label)
+    if "HTML-код" in changes and news.html_code.strip() and news.status == NewsStatus.NEW:
+        news.status = NewsStatus.GENERATED
+    if news.published_at and news.status != NewsStatus.PUBLISHED:
+        news.status = NewsStatus.PUBLISHED
+        changes.append("статус → Опубликована")
+    if changes:
+        db.add(NewsHistory(news_id=news.id, action="Изменено: " + ", ".join(changes)))
+        db.commit()
+        flash(request, "Сохранено")
+    else:
+        flash(request, "Изменений нет", "info")
+    return redirect(f"/news/{news_id}")
+
+
+ACTIONS = {
+    "publish": "Статус: Опубликована",
+    "postpone": "Статус: Отложена",
+    "to_work": "Возвращена в работу",
+    "archive": "Отправлена в архив",
+    "unarchive": "Возвращена из архива",
+    "duplicate_on": "Помечена как дубль",
+    "duplicate_off": "Снята отметка «дубль»",
+}
+
+
+@router.post("/news/{news_id}/action")
+def action(request: Request, news_id: int, action: str = Form(...), user_id: int = Depends(require_user),
+           db: Session = Depends(get_db)):
+    news = _get(db, news_id)
+    if action not in ACTIONS:
+        raise HTTPException(400, "Неизвестное действие")
+    if action == "publish":
+        news.status = NewsStatus.PUBLISHED
+        news.published_at = news.published_at or date.today()
+    elif action == "postpone":
+        news.status = NewsStatus.POSTPONED
+    elif action == "to_work":
+        news.status = NewsStatus.GENERATED if news.html_code.strip() else NewsStatus.NEW
+        news.published_at = None
+    elif action == "archive":
+        news.archived, news.archived_at = True, now()
+    elif action == "unarchive":
+        news.archived, news.archived_at = False, None
+    elif action == "duplicate_on":
+        news.is_duplicate = True
+    elif action == "duplicate_off":
+        news.is_duplicate = False
+    db.add(NewsHistory(news_id=news.id, action=ACTIONS[action]))
+    db.commit()
+    flash(request, ACTIONS[action])
+    return redirect(f"/news/{news_id}")
+
+
+@router.post("/news/{news_id}/images")
+async def upload_images(request: Request, news_id: int, images: list[UploadFile] = File(default=[]),
+                        user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    news = _get(db, news_id)
+    errors = await _store_uploads(db, news, images)
+    db.add(NewsHistory(news_id=news.id, action="Добавлены картинки"))
+    db.commit()
+    for err in errors:
+        flash(request, err, "warn")
+    return redirect(f"/news/{news_id}#images")
+
+
+@router.post("/news/{news_id}/images/{image_id}/delete")
+def delete_image(request: Request, news_id: int, image_id: int, user_id: int = Depends(require_user),
+                 db: Session = Depends(get_db)):
+    img = db.get(NewsImage, image_id)
+    if not img or img.news_id != news_id:
+        raise HTTPException(404)
+    remove_files(img.filename, img.thumb_filename)
+    db.delete(img)
+    db.add(NewsHistory(news_id=news_id, action=f"Удалена картинка «{img.original_name}»"))
+    db.commit()
+    flash(request, "Картинка удалена")
+    return redirect(f"/news/{news_id}#images")
+
+
+@router.get("/media/{image_id}/{kind}")
+def media(image_id: int, kind: str, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    img = db.get(NewsImage, image_id)
+    if not img or kind not in ("thumb", "original"):
+        raise HTTPException(404)
+    if kind == "thumb":
+        return FileResponse(media_path(img.thumb_filename), headers={"Cache-Control": "private, max-age=86400"})
+    return FileResponse(media_path(img.filename), filename=img.original_name)  # скачивание в оригинале
+
+
+@router.post("/news/{news_id}/generate")
+def generate(news_id: int, prompt_id: int = Form(...), user_id: int = Depends(require_user),
+             db: Session = Depends(get_db)):
+    news = _get(db, news_id)
+    if not generator.is_configured():
+        return JSONResponse({"ok": False, "error": "Не задан ключ DEEPSEEK_API_KEY в файле .env на сервере"}, 400)
+    if not db.get(Prompt, prompt_id):
+        return JSONResponse({"ok": False, "error": "Промпт не найден"}, 400)
+    if not news.original_text.strip():
+        return JSONResponse({"ok": False, "error": "Нет текста оригинальной новости — нечего переделывать"}, 400)
+    if news.gen_state == "running":
+        return JSONResponse({"ok": False, "error": "Генерация уже идёт"}, 409)
+    generator.mark_started(db, news)
+    db.commit()
+    executor.submit(generator.generate, news_id, prompt_id)
+    return {"ok": True}
+
+
+@router.get("/news/{news_id}/generation")
+def generation_state(news_id: int, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    news = _get(db, news_id)
+    return {"state": news.gen_state, "error": news.gen_error, "status": news.status}
+
+
+@router.post("/news/{news_id}/versions/{version_id}/restore")
+def restore_version(request: Request, news_id: int, version_id: int, user_id: int = Depends(require_user),
+                    db: Session = Depends(get_db)):
+    version = db.get(NewsVersion, version_id)
+    if not version or version.news_id != news_id:
+        raise HTTPException(404)
+    news = _get(db, news_id)
+    news.html_code = version.html_code
+    db.add(NewsHistory(news_id=news_id, action=f"Восстановлена версия от {version.created_at:%d.%m.%Y %H:%M}"))
+    db.commit()
+    flash(request, "Версия восстановлена")
+    return redirect(f"/news/{news_id}")

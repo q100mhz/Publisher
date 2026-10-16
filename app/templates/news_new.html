@@ -1,0 +1,48 @@
+{% extends "base.html" %}
+{% block title %}Новая новость{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div>
+    <a href="{{ url('/') }}" class="small">← Реестр</a>
+    <h1 style="margin-top:6px">Новая новость</h1>
+  </div>
+</div>
+<form method="post" action="{{ url('/news/new') }}" enctype="multipart/form-data" style="max-width:900px">
+  <div class="card">
+    <div class="field">
+      <label for="title">Заголовок новости</label>
+      <input id="title" class="title-input" type="text" name="title" required autofocus>
+    </div>
+    <div class="field-row">
+      <div class="field">
+        <label for="created_at">Дата создания</label>
+        <input id="created_at" type="datetime-local" name="created_at" value="{{ now.strftime('%Y-%m-%dT%H:%M') }}">
+      </div>
+      <div class="field">
+        <label for="planned">Плановая дата публикации</label>
+        <input id="planned" type="date" name="planned_publish_date">
+      </div>
+    </div>
+    <div class="field">
+      <label for="original">Текст оригинальной новости</label>
+      <textarea id="original" name="original_text" rows="10"></textarea>
+    </div>
+    <div class="field">
+      <label for="html">HTML-код переделанной новости <span class="muted">(необязательно — можно сгенерировать позже)</span></label>
+      <textarea id="html" class="code" style="min-height:180px" name="html_code" spellcheck="false"></textarea>
+    </div>
+    <div class="field">
+      <label>Картинки</label>
+      <label class="dropzone" data-dropzone style="margin-top:0">
+        <input type="file" name="images" accept="image/*" multiple data-file-list>
+        <span style="font-size:26px">＋</span>
+        <span data-file-label>Перетащите картинки сюда или нажмите, чтобы выбрать</span>
+      </label>
+    </div>
+  </div>
+  <div class="clay savebar">
+    <a href="{{ url('/') }}" class="btn btn-ghost">Отмена</a>
+    <button type="submit" class="btn-lg btn-green">Создать</button>
+  </div>
+</form>
+{% endblock %}

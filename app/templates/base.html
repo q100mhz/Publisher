@@ -1,0 +1,42 @@
+{% import "_icons.html" as ic %}<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}Publisher{% endblock %} · Publisher</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%23f7c531'/%3E%3Cpath d='M18 34V14h8a6.5 6.5 0 010 13h-8' fill='none' stroke='%232e2925' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3Ccircle cx='35' cy='34' r='5' fill='%23e5483b'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Oswald:wght@500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ url('/static/css/app.css') }}?v=6">
+  <script>window.BASE = "{{ BASE_PATH }}";</script>
+  <script src="{{ url('/static/js/app.js') }}?v=6" defer></script>
+</head>
+<body class="{% block body_class %}{% endblock %}">
+{{ ic.clay_defs() }}
+{% block body %}
+<header class="topbar">
+  <a class="brand" href="{{ url('/') }}">{{ ic.logo() }} Publisher</a>
+  <button class="menu-toggle btn-sm" type="button" data-menu-toggle aria-label="Меню">Меню</button>
+  <nav class="nav">
+    <a href="{{ url('/') }}" class="{{ 'active' if active == 'registry' }}">Реестр</a>
+    <a href="{{ url('/sources') }}" class="{{ 'active' if active == 'sources' }}">Источники</a>
+    <a href="{{ url('/prompts') }}" class="{{ 'active' if active == 'prompts' }}">Промпты</a>
+    <a href="{{ url('/runs') }}" class="{{ 'active' if active == 'runs' }}">Журнал парсера</a>
+    <a href="{{ url('/settings') }}" class="{{ 'active' if active == 'settings' }}">Настройки</a>
+  </nav>
+  <form class="logout" method="post" action="{{ url('/logout') }}">
+    <button class="btn-sm" type="submit" title="Выйти">Выйти</button>
+  </form>
+</header>
+<main class="page">
+  {% block content %}{% endblock %}
+</main>
+{% endblock %}
+{% if flashes %}
+<div class="flashes" data-flashes>
+  {% for f in flashes %}<div class="flash {{ f.kind }}">{{ f.text }}</div>{% endfor %}
+</div>
+{% endif %}
+</body>
+</html>

@@ -1,0 +1,95 @@
+{% extends "base.html" %}
+{% block title %}Источники{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Справочник источников</h1></div>
+
+<div class="clay auto-card" data-status-url="{{ url('/parser/status') }}">
+  {{ ic.clock_art() }}
+  <div>
+    <h2>Рубильник автопарсинга</h2>
+    <p class="muted" style="margin:6px 0 0">
+      {% if auto_enabled %}
+        Включён. Все активные сайты обходятся каждые 4 часа.
+        Следующий обход: <b data-next-run>{{ next_run|dt if next_run else '—' }}</b>.
+        Пока рубильник включён, ручной запуск недоступен.
+      {% else %}
+        Выключен. При включении парсер сразу обойдёт все активные сайты, а дальше — каждые 4 часа.
+      {% endif %}
+    </p>
+  </div>
+  <form method="post" action="{{ url('/auto') }}">
+    <input type="hidden" name="enabled" value="{{ '0' if auto_enabled else '1' }}">
+    <input type="hidden" name="back" value="/sources">
+    <button type="submit" class="switch big {{ 'on' if auto_enabled }}" aria-label="Рубильник">
+      <span class="track"><span class="knob"></span></span>
+    </button>
+  </form>
+</div>
+
+<div class="card" style="margin-bottom:24px">
+  <h2 style="margin-bottom:14px">Добавить сайт</h2>
+  <form method="post" action="{{ url('/sources') }}">
+    <div class="field-row">
+      <div class="field" style="grid-column: span 2">
+        <label for="url">Адрес страницы со списком статей</label>
+        <input id="url" type="url" name="url" placeholder="https://www.moedelo.org/club" required>
+      </div>
+      <div class="field">
+        <label for="name">Название</label>
+        <input id="name" type="text" name="name" placeholder="Моё дело">
+      </div>
+    </div>
+    <div class="field">
+      <label for="keywords">Ключевые слова <span class="muted">(необязательно)</span></label>
+      <input id="keywords" type="text" name="keywords" placeholder="НДС, УСН, самозанятые">
+      <p class="hint">Через запятую. Если заполнено — в реестр попадут только статьи, где встречается хотя бы одно слово. Пусто — берутся все статьи.</p>
+    </div>
+    <button type="submit">Добавить в справочник</button>
+  </form>
+  <p class="hint">Указывайте первую страницу ленты (без <code>?page=2</code>), где самые свежие статьи. При первом запуске загружаются 5 последних статей, дальше — все новые, вплоть до уже загруженных.</p>
+</div>
+
+{% if sources %}
+<div class="source-list">
+  {% for s in sources %}
+  <div class="clay source {{ 'inactive' if not s.is_active }}" data-source="{{ s.id }}">
+    <div>
+      <div class="name">{{ s.name }}</div>
+      <div class="url"><a href="{{ s.url }}" target="_blank" rel="noopener noreferrer">{{ s.url }}</a></div>
+      <div class="stat small">
+        <span class="dot {{ 'running' if s.is_running else 'st-' ~ s.last_status }}" data-dot></span>
+        <span data-message>
+          {% if s.is_running %}Парсится…{% elif s.last_run_at %}{{ s.last_run_at|dt }} — {{ s.last_message }}{% else %}Ещё не запускался{% endif %}
+        </span>
+        <span class="chip light">в реестре: {{ counts.get(s.id, 0) }}</span>
+        {% if s.keywords %}<span class="chip light" title="{{ s.keywords }}">фильтр: {{ s.keywords[:40] }}{{ '…' if s.keywords|length > 40 }}</span>{% endif %}
+        {% if not s.is_active %}<span class="chip archived">не участвует в автопарсинге</span>{% endif %}
+      </div>
+    </div>
+    <div class="controls">
+      <button type="button" class="btn-sm" data-run="{{ url('/sources/' ~ s.id ~ '/run') }}"
+              {{ 'disabled' if auto_enabled or s.is_running }}
+              title="{{ 'Недоступно: включён автопарсинг' if auto_enabled else 'Спарсить этот сайт сейчас' }}">▶ Спарсить сейчас</button>
+      <a class="btn btn-sm btn-ghost" href="{{ url('/runs?source=' ~ s.id) }}">Журнал</a>
+      <form method="post" action="{{ url('/sources/' ~ s.id ~ '/toggle') }}">
+        <button class="btn-sm {{ 'btn-ghost' if s.is_active else 'btn-green' }}">{{ 'Исключить' if s.is_active else 'Включить' }}</button>
+      </form>
+    </div>
+    <details class="fold">
+      <summary class="small">Редактировать</summary>
+      <form method="post" action="{{ url('/sources/' ~ s.id) }}" style="margin-top:12px">
+        <div class="field-row">
+          <div class="field"><label>Название</label><input type="text" name="name" value="{{ s.name }}"></div>
+          <div class="field" style="grid-column: span 2"><label>Адрес</label><input type="url" name="url" value="{{ s.url }}" required></div>
+        </div>
+        <div class="field"><label>Ключевые слова</label><input type="text" name="keywords" value="{{ s.keywords }}"></div>
+        <button class="btn-sm" type="submit">Сохранить</button>
+      </form>
+    </details>
+  </div>
+  {% endfor %}
+</div>
+{% else %}
+<div class="card empty">{{ ic.empty_art() }}<h3>Справочник пуст</h3><p class="muted">Добавьте первый сайт — форма выше.</p></div>
+{% endif %}
+{% endblock %}

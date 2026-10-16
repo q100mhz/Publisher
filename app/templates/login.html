@@ -1,0 +1,23 @@
+{% extends "base.html" %}
+{% block title %}Вход{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <div class="login-card clay">
+    <div class="login-art">{{ ic.login_art() }}</div>
+    <form class="login-form" method="post" action="{{ url('/login') }}">
+      <h1>Publisher</h1>
+      <p class="muted" style="margin:0 0 24px">Реестр публикаций, парсер новостей и генерация статей</p>
+      {% if error %}<div class="err">{{ error }}</div>{% endif %}
+      <div class="field">
+        <label for="login">Логин</label>
+        <input id="login" name="login" type="text" value="{{ login or '' }}" autocomplete="username" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password">Пароль</label>
+        <input id="password" name="password" type="password" autocomplete="current-password" required>
+      </div>
+      <button class="btn-lg" type="submit" style="width:100%;margin-top:6px">Войти</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

@@ -1,0 +1,54 @@
+{% extends "base.html" %}
+{% block title %}Промпты{% endblock %}
+{% block content %}
+<div class="page-head">
+  <h1>Справочник промптов</h1>
+  <a class="btn" href="{{ url('/prompts?edit=0') }}">+ Новый промпт</a>
+</div>
+<div class="prompts-layout">
+  <div class="card">
+    {% for p in prompts %}
+      <a class="prompt-item {{ 'on' if current and current.id == p.id }}" href="{{ url('/prompts?edit=' ~ p.id) }}">
+        {{ p.name }} {% if p.is_default %}<span class="chip {{ 'light' if current and current.id == p.id else 's-published' }}">основной</span>{% endif %}
+      </a>
+    {% else %}
+      <p class="muted">Промптов пока нет</p>
+    {% endfor %}
+  </div>
+
+  <div class="card">
+    {% if current or request.query_params.get('edit') == '0' %}
+    <form method="post" action="{{ url('/prompts') }}">
+      <input type="hidden" name="prompt_id" value="{{ current.id if current else '' }}">
+      <div class="field">
+        <label for="pname">Название</label>
+        <input id="pname" type="text" name="name" value="{{ current.name if current else '' }}" required>
+      </div>
+      <div class="field">
+        <label for="ptext">Текст промпта</label>
+        <div class="ph-list">
+          {% for key, label in placeholders.items() %}<button type="button" data-insert="{{ key }}" title="{{ label }}">{{ key }}</button>{% endfor %}
+        </div>
+        <textarea id="ptext" name="text" rows="18" required data-prompt-text>{{ current.text if current else '' }}</textarea>
+        <p class="hint">Нажмите на подстановку, чтобы вставить её в текст. При генерации вместо неё подставится значение из новости.
+          Если <code>{original_text}</code> в промпте нет — текст оригинала добавится в конец автоматически.
+          Нейросеть всегда получает указание вернуть только HTML-код.</p>
+      </div>
+      <div style="display:flex;gap:10px;flex-wrap:wrap">
+        <button type="submit" class="btn-green">Сохранить</button>
+      </div>
+    </form>
+    {% if current %}
+    <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+      {% if not current.is_default %}
+      <form method="post" action="{{ url('/prompts/' ~ current.id ~ '/default') }}"><button class="btn-yellow btn-sm">Сделать основным</button></form>
+      <form method="post" action="{{ url('/prompts/' ~ current.id ~ '/delete') }}"><button class="btn-red btn-sm" data-confirm="Удалить промпт «{{ current.name }}»?">Удалить</button></form>
+      {% endif %}
+    </div>
+    {% endif %}
+    {% else %}
+      <div class="empty"><h3>Выберите промпт слева</h3><p class="muted">Основной промпт выбирается в карточке новости по умолчанию.</p></div>
+    {% endif %}
+  </div>
+</div>
+{% endblock %}

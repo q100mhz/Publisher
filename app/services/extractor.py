@@ -131,6 +131,36 @@ def find_article_links(html: str, page_url: str) -> list[str]:
     return [u for u in candidates if parent(u) in keep or parent(u).rsplit("/", 1)[-1] in keep_tails]
 
 
+PAGE_QUERY = re.compile(r"(?:^|&)(page|PAGEN_\d+|p|pg|paged)=(\d+)(?:&|$)", re.I)
+PAGE_PATH = re.compile(r"/page/(\d+)/?$", re.I)
+
+
+def _page_number(url: str) -> tuple[str, int]:
+    """(«база» адреса без номера страницы, номер страницы)."""
+    p = urlparse(url)
+    m = PAGE_PATH.search(p.path)
+    if m:
+        return f"{p.netloc.lower().removeprefix('www.')}{p.path[:m.start()].rstrip('/')}", int(m.group(1))
+    q = PAGE_QUERY.search(p.query)
+    return f"{p.netloc.lower().removeprefix('www.')}{p.path.rstrip('/')}", int(q.group(2)) if q else 1
+
+
+def next_page_url(html: str, page_url: str) -> str | None:
+    """Ссылка на следующую страницу ленты: rel="next" или ссылка пагинации с номером на 1 больше."""
+    soup = BeautifulSoup(html, "lxml")
+    tag = soup.find(["link", "a"], rel="next", href=True)
+    if tag:
+        return urljoin(page_url, tag["href"])
+    base, current = _page_number(page_url)
+    for a in soup.find_all("a", href=True):
+        href = urljoin(page_url, a["href"].strip())
+        if href.startswith(("http://", "https://")):
+            cand_base, number = _page_number(href)
+            if cand_base == base and number == current + 1:
+                return href
+    return None
+
+
 def _parse_date(value: str | None) -> datetime | None:
     if not value:
         return None

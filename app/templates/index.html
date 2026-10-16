@@ -120,13 +120,13 @@
           <th class="col-hide">Картинки</th>
           <th>Статус</th>
           <th class="col-hide">Создана</th>
-          <th>Публикация</th>
+          <th>Плановая публикация</th>
         </tr>
       </thead>
       <tbody>
       {% for n in items %}
         {% set flag = n.publish_flag(today) %}
-        <tr class="{{ 'flag-' ~ flag if flag }} {{ 'is-dup' if n.is_duplicate }}">
+        <tr class="{{ 'flag-' ~ flag if flag }} {{ 'is-dup' if n.is_duplicate }}" data-quick-url="{{ url('/news/' ~ n.id ~ '/quick') }}">
           <td><input type="checkbox" name="ids" value="{{ n.id }}" aria-label="Выбрать"></td>
           <td class="title">
             <a href="{{ url('/news/' ~ n.id) }}">{{ n.title }}</a>
@@ -141,20 +141,26 @@
               {% if n.images|length > 3 %}<span class="small muted" style="margin-left:6px;align-self:center">+{{ n.images|length - 3 }}</span>{% endif %}
             </div>
           </td>
-          <td>
-            <span class="chip s-{{ n.status }}">{{ n.status_label }}</span>
+          <td class="nowrap">
+            <select class="status-select s-{{ n.status }}" data-quick-status aria-label="Статус" title="Сменить статус">
+              {% for key, label in statuses.items() %}
+                <option value="{{ key }}" {{ 'selected' if n.status == key }}>{{ label }}</option>
+              {% endfor %}
+              <option disabled>──────</option>
+              {% if n.archived %}<option value="unarchive">Вернуть из архива</option>
+              {% else %}<option value="archive">В архив</option>{% endif %}
+            </select>
             {% if n.archived %}<span class="chip archived">архив</span>{% endif %}
             {% if n.gen_state == 'running' %}<span class="chip light">генерация…</span>{% endif %}
           </td>
           <td class="col-hide nowrap small">{{ n.created_at|dt }}</td>
           <td class="nowrap small">
-            {% if n.published_at %}
-              ✓ {{ n.published_at|d }}
-            {% elif n.planned_publish_date %}
-              {% if flag == 'today' %}<span class="chip today">Сегодня</span>
-              {% elif flag == 'overdue' %}<span class="chip overdue">Просрочено</span> {{ n.planned_publish_date|d }}
-              {% else %}план {{ n.planned_publish_date|d }}{% endif %}
-            {% else %}<span class="muted">—</span>{% endif %}
+            <span data-published class="{{ 'hidden' if not n.published_at }}">✓ {{ n.published_at|d if n.published_at else '' }}</span>
+            <span data-planned-wrap class="{{ 'hidden' if n.published_at }}">
+              <input type="date" class="date-inline" data-quick-date value="{{ n.planned_publish_date.isoformat() if n.planned_publish_date else '' }}"
+                     aria-label="Плановая дата публикации" title="Плановая дата публикации">
+              <span data-flag-chip class="chip {{ flag }} {{ 'hidden' if not flag }}">{{ 'Сегодня' if flag == 'today' else 'Просрочено' if flag == 'overdue' else '' }}</span>
+            </span>
           </td>
         </tr>
       {% endfor %}

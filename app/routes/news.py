@@ -184,6 +184,46 @@ def action(request: Request, news_id: int, action: str = Form(...), user_id: int
     return redirect(f"/news/{news_id}")
 
 
+QUICK_STATUSES = {**NewsStatus.LABELS, "archive": "В архив", "unarchive": "Вернуть из архива"}
+
+
+@router.post("/news/{news_id}/quick")
+def quick_update(news_id: int, status: str | None = Form(None), planned_publish_date: str | None = Form(None),
+                 user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    """Изменение статуса или плановой даты прямо из реестра (без перехода в карточку)."""
+    news = _get(db, news_id)
+    if status is not None:
+        if status not in QUICK_STATUSES:
+            return JSONResponse({"ok": False, "error": "Неизвестный статус"}, 400)
+        if status == "archive":
+            news.archived, news.archived_at = True, now()
+        elif status == "unarchive":
+            news.archived, news.archived_at = False, None
+        elif status != news.status:
+            news.status = status
+            if status == NewsStatus.PUBLISHED:
+                news.published_at = news.published_at or date.today()
+            else:
+                news.published_at = None
+        db.add(NewsHistory(news_id=news.id, action=f"Из реестра: {QUICK_STATUSES[status]}"))
+    if planned_publish_date is not None:
+        value = _parse_date(planned_publish_date)
+        if value != news.planned_publish_date:
+            news.planned_publish_date = value
+            db.add(NewsHistory(news_id=news.id, action="Из реестра: плановая дата публикации "
+                                                        + (value.strftime("%d.%m.%Y") if value else "снята")))
+    db.commit()
+    return {
+        "ok": True,
+        "status": news.status,
+        "label": news.status_label,
+        "archived": news.archived,
+        "flag": news.publish_flag(date.today()),
+        "published_at": news.published_at.strftime("%d.%m.%Y") if news.published_at else "",
+        "planned": news.planned_publish_date.isoformat() if news.planned_publish_date else "",
+    }
+
+
 @router.post("/news/{news_id}/images")
 async def upload_images(request: Request, news_id: int, images: list[UploadFile] = File(default=[]),
                         user_id: int = Depends(require_user), db: Session = Depends(get_db)):

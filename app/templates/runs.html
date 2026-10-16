@@ -20,7 +20,7 @@
       <tr>
         <td class="nowrap"><a href="{{ url('/runs/' ~ r.id) }}">{{ r.started_at|dt }}</a></td>
         <td>{{ r.source.name if r.source else '—' }}</td>
-        <td>{{ 'Авто' if r.trigger == 'auto' else 'Вручную' }}</td>
+        <td>{{ {'auto': 'Авто', 'older': 'Старые статьи'}.get(r.trigger, 'Вручную') }}</td>
         <td>{{ r.found }}</td>
         <td><b>{{ r.added }}</b></td>
         <td>{{ r.skipped }}</td>

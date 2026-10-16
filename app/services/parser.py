@@ -24,7 +24,7 @@ from ..config import PARSER_FIRST_RUN_LIMIT, PARSER_MAX_PER_RUN, PARSER_USE_BROW
 from ..db import session_scope
 from ..models import News, NewsHistory, NewsImage, ParserRun, SeenUrl, Source, now
 from . import fetcher
-from .extractor import Article, extract_article, extract_text, find_article_links
+from .extractor import Article, extract_article, extract_text, find_article_links, next_page_url
 from .images import ImageError, save_image
 
 MIN_TEXT_LEN = 300  # если текста меньше — пробуем открыть статью через браузер
@@ -91,6 +91,56 @@ def _discover(source: Source, log: RunLog) -> list[str]:
     return links
 
 
+OLDER_BATCH = 5      # сколько старых статей добавлять за одно нажатие
+OLDER_MAX_PAGES = 15  # сколько страниц ленты листать в поисках старых статей
+
+
+def _older_candidates(links: list[str], known: set[str]) -> list[str]:
+    """Ещё не загруженные статьи, которые стоят в ленте ниже уже загруженных (то есть старше их)."""
+    if not known:
+        return list(links)
+    boundary = _boundary_index(links, known)
+    return [u for u in links[boundary:] if u not in known]
+
+
+def _discover_older(source: Source, known: set[str], want: int, log: RunLog) -> list[str]:
+    """Листает ленту (страницы ?page=2, /page/2/ … или кнопку «Загрузить ещё»), пока не наберёт want старых статей."""
+    all_links: list[str] = []
+    url, visited = source.url, set()
+    for page_no in range(1, OLDER_MAX_PAGES + 1):
+        visited.add(url)
+        try:
+            html = fetcher.fetch_html(url)
+        except fetcher.FetchError as e:
+            log(f"Страница {page_no}: не загрузилась ({e})")
+            break
+        links = find_article_links(html, url)
+        all_links += [u for u in links if u not in all_links]
+        older = _older_candidates(all_links, known)
+        log(f"Страница {page_no}: ссылок {len(links)}, старых незагруженных пока {len(older)}")
+        if len(older) >= want or (page_no == 1 and len(links) < 3):
+            break
+        nxt = next_page_url(html, url)
+        if not nxt or nxt in visited:
+            log("Следующей страницы ленты нет")
+            break
+        url = nxt
+
+    older = _older_candidates(all_links, known)
+    if len(older) < want and PARSER_USE_BROWSER:
+        log("Открываю ленту в браузере и нажимаю «Загрузить ещё»")
+        html = fetcher.render_html(
+            source.url, click_more=True, max_wait=60,
+            ready=lambda h: len(_older_candidates(find_article_links(h, source.url), known)) >= want,
+        )
+        rendered = find_article_links(html, source.url)
+        rendered_older = _older_candidates(rendered, known)
+        log(f"Через браузер: ссылок {len(rendered)}, старых незагруженных {len(rendered_older)}")
+        if len(rendered_older) > len(older):
+            older = rendered_older
+    return older
+
+
 def _save_article(source_id: int, article: Article, created_at: datetime, log: RunLog) -> int:
     with session_scope() as db:
         news = News(
@@ -124,7 +174,8 @@ def _save_article(source_id: int, article: Article, created_at: datetime, log: R
     return news_id
 
 
-def run_source(source_id: int, trigger: str = "manual") -> None:
+def run_source(source_id: int, trigger: str = "manual", mode: str = "new") -> None:
+    """mode: "new" — свежие статьи, "older" — следующие 5 статей старше уже загруженных."""
     # Захватываем источник атомарно: один сайт никогда не парсится в двух потоках сразу
     with session_scope() as db:
         got = db.execute(
@@ -134,7 +185,7 @@ def run_source(source_id: int, trigger: str = "manual") -> None:
         if not got:
             return
         source = db.get(Source, source_id)
-        run = ParserRun(source_id=source_id, trigger=trigger)
+        run = ParserRun(source_id=source_id, trigger="older" if mode == "older" else trigger)
         db.add(run)
         db.flush()
         run_id = run.id
@@ -148,32 +199,45 @@ def run_source(source_id: int, trigger: str = "manual") -> None:
     found = added = skipped = 0
     status, message = "ok", ""
     first_run = not known
+    older_mode = mode == "older" and not first_run
     keywords = _keywords(source)
     last_date = source.last_article_date
     newest_date = last_date
 
     try:
-        log(f"Старт: {source.name} — {source.url}" + (" (первый запуск: берём последние "
-            f"{PARSER_FIRST_RUN_LIMIT})" if first_run else ""))
-        links = _discover(source, log)
+        log(f"Старт: {source.name} — {source.url}" + (
+            f" (загружаем ещё {OLDER_BATCH} статей старше уже загруженных)" if older_mode
+            else f" (первый запуск: берём последние {PARSER_FIRST_RUN_LIMIT})" if first_run else ""))
+        if older_mode:
+            # С фильтром по словам часть статей отсеется — берём кандидатов с запасом
+            want = OLDER_BATCH * 3 if keywords else OLDER_BATCH
+            links = _discover_older(source, known, want, log)
+        else:
+            links = _discover(source, log)
         found = len(links)
-        if not links:
+        if not links and older_mode:
+            status, message = "empty", "Более старых статей не найдено"
+        elif not links:
             status, message = "error", "Не найдено ни одной ссылки на статью"
             log(message)
         else:
-            if first_run:
+            if older_mode:
+                targets = links  # уже только старые незагруженные
+            elif first_run:
                 targets = links[:PARSER_FIRST_RUN_LIMIT]
             else:
                 boundary = _boundary_index(links, known)
                 targets = [u for u in links[:boundary] if u not in known][:PARSER_MAX_PER_RUN]
-            log(f"К загрузке: {len(targets)}")
+            log(f"Кандидатов: {len(targets)}, загружаем до {OLDER_BATCH}" if older_mode else f"К загрузке: {len(targets)}")
 
             older_in_row = 0
             for url in targets:
+                if older_mode and added >= OLDER_BATCH:
+                    break
                 try:
                     log(f"→ {url}")
                     article = _load_article(url, log)
-                    if (not first_run and last_date and article.published_at
+                    if (not first_run and not older_mode and last_date and article.published_at
                             and article.published_at.date() < last_date.date()):
                         older_in_row += 1
                         skipped += 1
@@ -207,7 +271,7 @@ def run_source(source_id: int, trigger: str = "manual") -> None:
             message = f"Найдено {found}, добавлено {added}" + (f", пропущено {skipped}" if skipped else "")
             if not added and not skipped:
                 status = "empty"
-                message = "Новых статей нет"
+                message = "Более старых статей не найдено" if older_mode else "Новых статей нет"
     except Exception as e:
         status, message = "error", str(e)[:500]
         log("Ошибка: " + message)
@@ -241,8 +305,8 @@ def run_all(trigger: str = "auto") -> None:
         _auto_lock.release()
 
 
-def submit_source(source_id: int) -> None:
-    executor.submit(run_source, source_id, "manual")
+def submit_source(source_id: int, mode: str = "new") -> None:
+    executor.submit(run_source, source_id, "manual", mode)
 
 
 def reset_stale_flags() -> None:

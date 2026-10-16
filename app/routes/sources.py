@@ -95,6 +95,17 @@ def run_source(source_id: int, user_id: int = Depends(require_user), db: Session
     return {"ok": True}
 
 
+@router.post("/sources/{source_id}/run-older")
+def run_source_older(source_id: int, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    """Догрузить 5 статей старше уже загруженных. Работает и при включённом рубильнике:
+    один сайт всё равно никогда не парсится в двух потоках сразу."""
+    source = db.get(Source, source_id) or _404()
+    if source.is_running:
+        return JSONResponse({"ok": False, "error": "Этот сайт сейчас парсится — дождитесь окончания"}, 409)
+    parser.submit_source(source_id, mode="older")
+    return {"ok": True}
+
+
 @router.post("/auto")
 def toggle_auto(request: Request, enabled: str = Form(""), back: str = Form("/sources"),
                 user_id: int = Depends(require_user)):

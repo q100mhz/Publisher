@@ -70,6 +70,9 @@
       <button type="button" class="btn-sm" data-run="{{ url('/sources/' ~ s.id ~ '/run') }}"
               {{ 'disabled' if auto_enabled or s.is_running }}
               title="{{ 'Недоступно: включён автопарсинг' if auto_enabled else 'Спарсить этот сайт сейчас' }}">▶ Спарсить сейчас</button>
+      <button type="button" class="btn-sm btn-yellow" data-run="{{ url('/sources/' ~ s.id ~ '/run-older') }}" data-allow-auto="1"
+              data-started="Ищу более старые статьи — до 5 штук появятся в реестре по мере загрузки."
+              {{ 'disabled' if s.is_running }} title="Загрузить 5 статей старше уже загруженных">⏬ Ещё 5 старых</button>
       <a class="btn btn-sm btn-ghost" href="{{ url('/runs?source=' ~ s.id) }}">Журнал</a>
       <form method="post" action="{{ url('/sources/' ~ s.id ~ '/toggle') }}">
         <button class="btn-sm {{ 'btn-ghost' if s.is_active else 'btn-green' }}">{{ 'Исключить' if s.is_active else 'Включить' }}</button>

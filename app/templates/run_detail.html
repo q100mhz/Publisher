@@ -8,7 +8,7 @@
   </div>
   <div class="status-big">
     <span class="chip light">{{ run.source.name if run.source else '—' }}</span>
-    <span class="chip light">{{ 'Авто' if run.trigger == 'auto' else 'Вручную' }}</span>
+    <span class="chip light">{{ {'auto': 'Авто', 'older': 'Старые статьи'}.get(run.trigger, 'Вручную') }}</span>
     <span class="chip light">найдено {{ run.found }}</span>
     <span class="chip s-published">добавлено {{ run.added }}</span>
   </div>

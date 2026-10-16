@@ -67,6 +67,52 @@
     all.addEventListener("change", () => { boxes.forEach((b) => (b.checked = all.checked)); sync(); });
   }
 
+  // ---------- Реестр: статус и плановая дата прямо в строке ----------
+  async function quickUpdate(row, data, control) {
+    control.classList.add("saving");
+    control.disabled = true;
+    try {
+      const res = await post(row.dataset.quickUrl, data);
+      const status = $("[data-quick-status]", row);
+      status.className = `status-select s-${res.status}`;
+      status.value = res.status;
+      // Запись ушла в архив (или вернулась из него) — в текущем списке её больше нет
+      const inArchiveView = new URLSearchParams(location.search).get("archive") === "1";
+      if (res.archived !== inArchiveView) {
+        row.classList.add("row-gone");
+        setTimeout(() => row.remove(), 300);
+        toast(res.archived ? "Отправлено в архив" : "Возвращено из архива");
+        return;
+      }
+      row.classList.remove("flag-today", "flag-overdue");
+      if (res.flag) row.classList.add(`flag-${res.flag}`);
+      const published = $("[data-published]", row);
+      published.textContent = res.published_at ? `✓ ${res.published_at}` : "";
+      published.classList.toggle("hidden", !res.published_at);
+      $("[data-planned-wrap]", row).classList.toggle("hidden", !!res.published_at);
+      $("[data-quick-date]", row).value = res.planned;
+      const chip = $("[data-flag-chip]", row);
+      chip.className = `chip ${res.flag}${res.flag ? "" : " hidden"}`;
+      chip.textContent = res.flag === "today" ? "Сегодня" : res.flag === "overdue" ? "Просрочено" : "";
+    } catch (err) {
+      toast(err.message, "warn");
+    } finally {
+      control.classList.remove("saving");
+      control.disabled = false;
+    }
+  }
+
+  $$("[data-quick-status]").forEach((sel) => {
+    let previous = sel.value;
+    sel.addEventListener("change", async () => {
+      if (sel.value === "archive" && !confirm("Отправить новость в архив?")) { sel.value = previous; return; }
+      await quickUpdate(sel.closest("tr"), { status: sel.value }, sel);
+      previous = sel.value;
+    });
+  });
+  $$("[data-quick-date]").forEach((input) => input.addEventListener("change", () =>
+    quickUpdate(input.closest("tr"), { planned_publish_date: input.value }, input)));
+
   // ---------- Карточка новости ----------
   const newsForm = $("#news-form");
   const codeArea = $("[data-html-code]");
@@ -245,8 +291,7 @@
           anyRunning ||= s.running;
           $("[data-dot]", card).className = `dot ${s.running ? "running" : "st-" + s.status}`;
           $("[data-message]", card).textContent = s.running ? "Парсится…" : (s.last_run ? `${s.last_run} — ${s.message}` : "Ещё не запускался");
-          const btn = $("[data-run]", card);
-          btn.disabled = st.auto || s.running;
+          $$("[data-run]", card).forEach((btn) => { btn.disabled = (st.auto && !btn.dataset.allowAuto) || s.running; });
         });
         const next = $("[data-next-run]");
         if (next && st.next_run) next.textContent = st.next_run;
@@ -262,7 +307,8 @@
       await post(btn.dataset.run);
       $("[data-dot]", card).className = "dot running";
       $("[data-message]", card).textContent = "Парсится…";
-      toast("Парсинг запущен. Новые статьи появятся в реестре по мере загрузки.");
+      $$("[data-run]", card).forEach((b) => { b.disabled = true; });
+      toast(btn.dataset.started || "Парсинг запущен. Новые статьи появятся в реестре по мере загрузки.");
       startStatusPolling();
     } catch (err) {
       btn.disabled = false;

@@ -16,6 +16,7 @@
 from __future__ import annotations
 
 import random
+import re
 import threading
 import time
 from typing import Callable
@@ -99,11 +100,17 @@ def fetch_html(url: str) -> str:
     return resp.text
 
 
-def render_html(url: str, ready: Callable[[str], bool] | None = None, max_wait: float = 20) -> str:
+# Текст кнопки подгрузки ленты: «Загрузить ещё», «Показать ещё», «Показать больше», «Ещё», «Load more»
+LOAD_MORE = re.compile(r"^\s*((загрузить|показать|смотреть)\s+(ещё|еще|больше)|ещё|еще|load more|show more)\s*$", re.I)
+
+
+def render_html(url: str, ready: Callable[[str], bool] | None = None, max_wait: float = 20,
+                click_more: bool = False) -> str:
     """Открывает страницу в настоящем (headless) браузере — для сайтов, где статьи подгружаются скриптами.
 
     ready(html) — проверка «нужное уже появилось на странице». Пока она не выполнена, браузер
     прокручивает страницу и ждёт, но не дольше max_wait секунд.
+    click_more — дополнительно нажимать кнопку «Загрузить ещё» (для лент без постраничной навигации).
     """
     if not PARSER_USE_BROWSER:
         raise FetchError("Браузерный режим отключён (PARSER_USE_BROWSER=false)")
@@ -134,6 +141,14 @@ def render_html(url: str, ready: Callable[[str], bool] | None = None, max_wait: 
                         if time.monotonic() > deadline:
                             break
                         page.mouse.wheel(0, 2500)
+                        if click_more:
+                            button = page.locator("button:visible, a:visible").filter(has_text=LOAD_MORE).last
+                            try:
+                                if button.count():
+                                    button.click(timeout=3000)
+                                    page.wait_for_timeout(1200)
+                            except Exception:
+                                pass
                         page.wait_for_timeout(800)
                         html = page.content()
                     return html

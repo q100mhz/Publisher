@@ -29,7 +29,7 @@ def _own_prompt(db: Session, prompt_id: int, user_id: int) -> Prompt:
     return prompt
 
 
-PROMPT_KINDS = {"text": "Для статьи", "image": "Для картинки"}
+PROMPT_KINDS = {"text": "Для статьи", "title": "Для заголовка", "image": "Для картинки"}
 
 
 @router.get("/prompts")
@@ -39,7 +39,8 @@ def prompts_page(request: Request, edit: int | None = None, kind: str = "text", 
                          .order_by(Prompt.is_default.desc(), Prompt.name)).all()
     current = _own_prompt(db, edit, user_id) if edit else None
     kind = current.kind if current else (kind if kind in PROMPT_KINDS else "text")
-    placeholders = generator.IMAGE_PLACEHOLDERS if kind == "image" else generator.PLACEHOLDERS
+    placeholders = {"image": generator.IMAGE_PLACEHOLDERS, "title": generator.TITLE_PLACEHOLDERS}.get(
+        kind, generator.PLACEHOLDERS)
     return render(request, "prompts.html", active="prompts", prompts=prompts, current=current, kind=kind,
                   kinds=PROMPT_KINDS, placeholders=placeholders)
 
@@ -118,7 +119,7 @@ def save_theme(request: Request, theme: str = Form("auto"), user_id: int = Depen
 
 
 @router.post("/settings/ai")
-def save_ai(request: Request, provider: str = Form(...), model: str = Form(""), api_key: str = Form(""),
+def save_ai(request: Request, provider: str = Form(...), model: str = Form("", alias="ai_model_name"), api_key: str = Form(""),
             base_url: str = Form(""), temperature: str = Form("1.0"), remove_key: str = Form(""),
             user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     if provider not in ai.PROVIDERS:
@@ -150,7 +151,7 @@ def save_ai(request: Request, provider: str = Form(...), model: str = Form(""), 
 
 
 @router.post("/settings/images")
-def save_images(request: Request, provider: str = Form(""), model: str = Form(""), api_key: str = Form(""),
+def save_images(request: Request, provider: str = Form(""), model: str = Form("", alias="img_model_name"), api_key: str = Form(""),
                 base_url: str = Form(""), size: str = Form(""), remove_key: str = Form(""),
                 user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     provider = provider if provider in ai.IMAGE_PROVIDERS else ""

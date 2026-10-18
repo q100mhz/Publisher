@@ -139,8 +139,9 @@
     const style = "<style>body{font-family:Georgia,'Times New Roman',serif;font-size:17px;line-height:1.65;color:#222;max-width:760px;margin:24px auto;padding:0 20px}img{max-width:100%;height:auto}h1,h2,h3{font-family:Arial,sans-serif;line-height:1.25}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:6px 10px}</style>";
     // Блок title/meta из ответа нейросети показываем отдельной плашкой — читатель его не видит, но проверить SEO полезно
     const doc = new DOMParser().parseFromString(html, "text/html");
-    const title = doc.querySelector("title")?.textContent?.trim();
-    const desc = doc.querySelector('meta[name="description"]')?.getAttribute("content")?.trim();
+    const metaDoc = new DOMParser().parseFromString(($("[data-meta]")?.value || "") + html, "text/html");
+    const title = metaDoc.querySelector("title")?.textContent?.trim();
+    const desc = metaDoc.querySelector('meta[name="description"]')?.getAttribute("content")?.trim();
     const seo = title || desc
       ? `<div style="font-family:Arial,sans-serif;font-size:13px;background:#fff6e0;border:1px dashed #e0b44a;border-radius:10px;padding:10px 14px;margin-bottom:22px;color:#5b4500"><b>SEO</b>${title ? `<br><b>title:</b> ${escapeHtml(title)}` : ""}${desc ? `<br><b>description:</b> ${escapeHtml(desc)}` : ""}</div>`
       : "";
@@ -161,6 +162,7 @@
     renderPreview();
     let t;
     codeArea.addEventListener("input", () => { clearTimeout(t); t = setTimeout(renderPreview, 400); });
+    $("[data-meta]")?.addEventListener("input", () => { clearTimeout(t); t = setTimeout(renderPreview, 400); });
   }
 
   // Вкладки «Как увидит читатель» / «HTML-код»
@@ -188,6 +190,38 @@
     ta.remove();
     if (!ok) throw new Error("Браузер не дал доступ к буферу обмена");
   }
+
+  // Копирование содержимого любого поля (META, изменённый заголовок)
+  $$("[data-copy-from]").forEach((btn) => btn.addEventListener("click", async () => {
+    const field = $(btn.dataset.copyFrom);
+    if (!field || !field.value.trim()) { toast("Поле пустое — копировать нечего", "warn"); return; }
+    try {
+      await copyText(field.value);
+      const old = btn.innerHTML;
+      btn.innerHTML = "✓ Скопировано";
+      setTimeout(() => (btn.innerHTML = old), 2000);
+    } catch (err) { toast(err.message, "warn"); }
+  }));
+
+  // Новый заголовок отдельным запросом к нейросети
+  const titleBtn = $("[data-generate-title]");
+  if (titleBtn) titleBtn.addEventListener("click", async () => {
+    const privacy = $("[data-generate]")?.dataset.privacy;
+    if (privacy && !confirm(`В статье найдены персональные данные (${privacy}). Перед отправкой в нейросеть они будут удалены. Продолжить?`)) return;
+    const old = titleBtn.innerHTML;
+    titleBtn.disabled = true;
+    titleBtn.innerHTML = '<span class="blob-loader" style="width:14px;height:14px"></span> Придумываю…';
+    try {
+      const res = await post(titleBtn.dataset.url, { prompt_id: $("[data-title-prompt]").value });
+      $("[data-new-title]").value = res.title;
+      toast("Новый заголовок сохранён");
+    } catch (err) {
+      toast(err.message, "warn");
+    } finally {
+      titleBtn.disabled = false;
+      titleBtn.innerHTML = old;
+    }
+  });
 
   const copyBtn = $("[data-copy]");
   if (copyBtn) copyBtn.addEventListener("click", async () => {
@@ -232,6 +266,7 @@
   if (genBtn) {
     genBtn.addEventListener("click", async () => {
       if (dirty && !confirm("В карточке есть несохранённые изменения. После генерации страница обновится и они пропадут. Продолжить?")) return;
+      if (genBtn.dataset.privacy && !confirm(`В статье найдены персональные данные (${genBtn.dataset.privacy}). Перед отправкой в нейросеть они будут заменены метками вроде [ФИО] и [телефон] и в ИИ не попадут. Продолжить?`)) return;
       if (codeArea.value.trim() && !confirm("Текущий HTML-код будет заменён новой версией (старая останется в «Версиях генерации»). Продолжить?")) return;
       genBtn.disabled = true;
       try {
@@ -274,6 +309,8 @@
   if (imgBtn) {
     imgBtn.addEventListener("click", async () => {
       if (dirty && !confirm("В карточке есть несохранённые изменения. После создания картинки страница обновится и они пропадут. Продолжить?")) return;
+      const privacy = $("[data-generate]")?.dataset.privacy;
+      if (privacy && !confirm(`В статье найдены персональные данные (${privacy}). В описание для картинки они не попадут — будут удалены. Продолжить?`)) return;
       imgBtn.disabled = true;
       try {
         await post(imgBtn.dataset.url, { prompt_id: $("[data-img-prompt]").value });
@@ -370,7 +407,11 @@
       $("[data-model-hint]").textContent = models.length
         ? `Варианты: ${models.join(", ")}. Пусто — ${opt.dataset.defaultModel || models[0]}.`
         : "Впишите название модели так, как оно указано в документации сервиса.";
-      $("[data-base-url-field]").classList.toggle("hidden", opt.dataset.custom !== "1");
+      $("[data-base-url-field]").classList.toggle("hidden", opt.dataset.editable !== "1");
+      $("[data-base-url]").placeholder = opt.dataset.base || "https://example.com/v1";
+      $("[data-base-hint]").textContent = providerSelect.value === "qwen"
+        ? "Пусто — международный адрес Model Studio. Если в консоли Alibaba Cloud указан адрес рабочего пространства (…maas.aliyuncs.com/compatible-mode/v1), вставьте его."
+        : "Для любого сервиса с OpenAI-совместимым API: российские модели через шлюзы, локальные модели и т. п.";
       $("[data-temperature-field]").classList.toggle("hidden", opt.dataset.temperature !== "1");
       const link = $("[data-key-link]");
       link.innerHTML = opt.dataset.keyUrl
@@ -392,7 +433,10 @@
       const opt = imgProvider.selectedOptions[0];
       const models = opt.dataset.models ? opt.dataset.models.split("|") : [];
       $("[data-img-model-list]").innerHTML = models.map((m) => `<option value="${m}">`).join("");
-      $("[data-img-base-url]").classList.toggle("hidden", imgProvider.value !== "custom");
+      $("[data-img-base-url]").classList.toggle("hidden", !["custom", "qwen"].includes(imgProvider.value));
+      $("[data-img-base-hint]").textContent = imgProvider.value === "qwen"
+        ? "Пусто — международный адрес Model Studio. Можно вставить адрес своего рабочего пространства (…maas.aliyuncs.com/compatible-mode/v1)."
+        : "Сервис должен принимать запросы в формате OpenAI Images (/images/generations).";
       $("[data-img-key]").classList.toggle("hidden", imgProvider.value === "");
     };
     imgProvider.addEventListener("change", syncImg);

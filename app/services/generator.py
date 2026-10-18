@@ -4,15 +4,45 @@ from __future__ import annotations
 import re
 import traceback
 
+from bs4 import BeautifulSoup, Doctype
+
 from ..db import session_scope
 from ..models import News, NewsHistory, NewsImage, NewsStatus, NewsVersion, Prompt, User, now
-from . import ai
+from . import ai, pii
 from .images import ImageError, save_image
 
 SYSTEM_MESSAGE = (
     "Ты — редактор и SEO-копирайтер. Отвечай только готовым HTML-кодом статьи, "
-    "без пояснений до или после, без markdown и без обрамления ```."
+    "без пояснений до или после, без markdown и без обрамления ```. "
+    "SEO-теги (<title>, <meta name=\"description\"> и другие meta) размести в самом начале ответа, "
+    "затем статью с заголовком в <h1>. "
+    "Метки в квадратных скобках вроде [ФИО] или [телефон] — это удалённые персональные данные: "
+    "не восстанавливай их и не упоминай в статье."
 )
+
+TITLE_SYSTEM_MESSAGE = (
+    "Ты — редактор. Ответь только новым заголовком статьи одной строкой: без кавычек, "
+    "без HTML, без пояснений. Метки вроде [ФИО] — удалённые персональные данные, не используй их."
+)
+
+TITLE_PLACEHOLDERS = {
+    "{title}": "Заголовок исходной новости",
+    "{original_text}": "Текст исходной новости (персональные данные заменены метками)",
+    "{generated_text}": "Переделанная статья без HTML (если уже сгенерирована)",
+}
+
+DEFAULT_TITLE_PROMPT = """Придумай новый заголовок для статьи на сайте бухгалтерской компании.
+
+Требования:
+- уникальный, не повторяет исходный заголовок;
+- до 80 символов, понятен предпринимателю, содержит главную мысль и ключевое слово для поиска;
+- без кликбейта и без кавычек.
+
+Исходный заголовок: {title}
+
+Текст статьи:
+{original_text}
+"""
 
 PLACEHOLDERS = {
     "{title}": "Заголовок исходной новости",
@@ -64,11 +94,19 @@ def _plain(text_: str, limit: int) -> str:
     return text_[:limit].rsplit(" ", 1)[0] + "…" if len(text_) > limit else text_
 
 
+def privacy_report(news: News) -> dict:
+    """Какие персональные данные найдены в том, что может уйти в нейросеть (заголовок и исходный текст)."""
+    findings = pii.find(f"{news.title or ''}\n{news.original_text or ''}")
+    counts = pii.summary(findings)
+    return {"counts": counts, "text": pii.describe(counts),
+            "examples": [(f.kind, pii.mask(f.value)) for f in findings[:12]]}
+
+
 def render_image_prompt(template: str, news: News) -> str:
     values = {
-        "{title}": news.title or "",
-        "{original_text}": _plain(news.original_text, 1500),
-        "{generated_text}": _plain(news.html_code, 1500),
+        "{title}": pii.redact(news.title or ""),
+        "{original_text}": pii.redact(_plain(news.original_text, 1500)),
+        "{generated_text}": pii.redact(_plain(news.html_code, 1500)),
     }
     text_ = template
     for key, value in values.items():
@@ -85,7 +123,7 @@ def generate_image(news_id: int, prompt_id: int) -> None:
             news = db.get(News, news_id)
             prompt = db.get(Prompt, prompt_id)
             cfg = ai.image_config(db, db.get(User, news.user_id))
-            image_prompt = render_image_prompt(prompt.text, news)
+            image_prompt = render_image_prompt(prompt.text, news)  # персональные данные уже удалены
             prompt_name = prompt.name
             number = len(news.generated_images) + 1
 
@@ -110,9 +148,11 @@ def generate_image(news_id: int, prompt_id: int) -> None:
 
 
 def render_prompt(template: str, news: News) -> str:
+    """Промпт для нейросети. Персональные данные заменяются метками ещё до подстановки."""
     values = {
-        "{title}": news.title or "",
-        "{original_text}": news.original_text or "",
+        "{title}": pii.redact(news.title or ""),
+        "{original_text}": pii.redact(news.original_text or ""),
+        "{generated_text}": pii.redact(_plain(news.html_code, 6000)),
         "{source_url}": news.source_url or "",
         "{source_name}": news.source.name if news.source else "",
         "{date}": news.original_published_at.strftime("%d.%m.%Y") if news.original_published_at else "",
@@ -123,6 +163,67 @@ def render_prompt(template: str, news: News) -> str:
     if "{original_text}" not in template:
         text += f"\n\nЗаголовок: {values['{title}']}\n\nТекст оригинала:\n{values['{original_text}']}"
     return text
+
+
+def split_meta(html: str) -> tuple[str, str, str]:
+    """Делит ответ нейросети на META-раздел и текст статьи.
+
+    Возвращает (meta, статья, заголовок). В META уходят <title>, <meta>, <link rel="canonical">
+    и разметка schema.org (JSON-LD); обёртки <html>/<head>/<body> убираются.
+    Заголовок — текст <h1>, а если его нет — текст <title>.
+    """
+    soup = BeautifulSoup(html, "html.parser")
+    title_tag = soup.find("title")
+    page_title = title_tag.get_text(" ", strip=True) if title_tag else ""
+    meta_parts = []
+    for tag in soup.find_all(["title", "meta", "link", "script"]):
+        if tag.name == "link" and "canonical" not in (tag.get("rel") or []):
+            continue
+        if tag.name == "script" and (tag.get("type") or "").lower() != "application/ld+json":
+            continue
+        meta_parts.append(str(tag))
+        tag.extract()
+    for node in soup.find_all(string=lambda t: isinstance(t, Doctype)):
+        node.extract()
+    if soup.body:
+        body = soup.body.decode_contents()
+    else:
+        for name in ("html", "head", "body"):
+            for tag in soup.find_all(name):
+                tag.unwrap()
+        body = str(soup)
+    body = re.sub(r"\n{3,}", "\n\n", body).strip()
+    h1 = BeautifulSoup(body, "html.parser").find("h1")
+    heading = h1.get_text(" ", strip=True) if h1 else page_title
+    return "\n".join(meta_parts), body, heading
+
+
+def clean_title(answer: str) -> str:
+    text_ = re.sub(r"<[^>]+>", " ", answer or "")
+    line = next((ln.strip() for ln in text_.splitlines() if ln.strip()), "")
+    line = re.sub(r"^(заголовок|новый заголовок)\s*[:\-—]\s*", "", line, flags=re.I)
+    return line.strip(" «»\"'*#").strip()[:300]
+
+
+def generate_title(news_id: int, prompt_id: int) -> str:
+    """Новый заголовок отдельным запросом к нейросети (синхронно — это быстрый запрос)."""
+    with session_scope() as db:
+        news = db.get(News, news_id)
+        prompt = db.get(Prompt, prompt_id)
+        cfg = ai.user_config(db, db.get(User, news.user_id))
+        message = render_prompt(prompt.text, news)
+        report = privacy_report(news)
+        prompt_name = prompt.name
+    title = clean_title(ai.complete(cfg, TITLE_SYSTEM_MESSAGE, message))
+    if not title:
+        raise ai.AIError("Нейросеть не предложила заголовок — попробуйте ещё раз")
+    with session_scope() as db:
+        news = db.get(News, news_id)
+        news.new_title = title
+        note = f"; перед отправкой удалены персональные данные: {report['text']}" if report["counts"] else ""
+        db.add(NewsHistory(news_id=news_id, action=f"Сгенерирован заголовок (промпт «{prompt_name}», "
+                                                   f"{cfg.label}: {cfg.model}){note}"))
+    return title
 
 
 def clean_html(answer: str) -> str:
@@ -141,22 +242,29 @@ def generate(news_id: int, prompt_id: int) -> None:
             user = db.get(User, news.user_id)
             cfg = ai.user_config(db, user)
             user_message = render_prompt(prompt.text, news)
+            report = privacy_report(news)
             prompt_name = prompt.name
 
-        html = clean_html(ai.complete(cfg, SYSTEM_MESSAGE, user_message))
-        if not html:
+        raw = clean_html(ai.complete(cfg, SYSTEM_MESSAGE, user_message))
+        if not raw:
             raise ai.AIError("Нейросеть вернула пустой ответ")
+        meta, html, heading = split_meta(raw)
 
         with session_scope() as db:
             news = db.get(News, news_id)
             news.html_code = html
+            news.meta_html = meta
+            if heading and not (news.new_title or "").strip():
+                news.new_title = heading[:1000]  # уже заданный вручную или кнопкой заголовок не затираем
             if news.status == NewsStatus.NEW:
                 news.status = NewsStatus.GENERATED
             news.gen_state = "idle"
             news.gen_error = ""
             model = f"{cfg.label}: {cfg.model}"[:100]
-            db.add(NewsVersion(news_id=news_id, html_code=html, prompt_name=prompt_name, model=model))
-            db.add(NewsHistory(news_id=news_id, action=f"Сгенерирован текст (промпт «{prompt_name}», {model})"))
+            db.add(NewsVersion(news_id=news_id, html_code=html, meta_html=meta, title=heading or None,
+                               prompt_name=prompt_name, model=model))
+            note = f"; перед отправкой удалены персональные данные: {report['text']}" if report["counts"] else ""
+            db.add(NewsHistory(news_id=news_id, action=f"Сгенерирован текст (промпт «{prompt_name}», {model}){note}"))
     except Exception as e:
         if not isinstance(e, ai.AIError):
             traceback.print_exc()

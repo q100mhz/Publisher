@@ -133,6 +133,7 @@
             <div class="sub">
               {{ n.source_name }}
               {% if n.is_duplicate %} · <span class="chip dup">дубль</span>{% endif %}
+              {% if pii_rows.get(n.id) %} · <span class="chip pii" title="Персональные данные: {{ pii_rows[n.id] }}. В нейросеть не отправляются.">🛡 ПДн</span>{% endif %}
             </div>
           </td>
           <td class="col-hide">

@@ -23,6 +23,10 @@ NEW_COLUMNS = [
     ("news_images", "kind", "VARCHAR(20) NOT NULL DEFAULT 'original'"),
     ("news", "img_state", "VARCHAR(20) NOT NULL DEFAULT 'idle'"),
     ("news", "img_error", "TEXT NOT NULL DEFAULT ''"),
+    ("news", "new_title", "VARCHAR(1000)"),
+    ("news", "meta_html", "TEXT NOT NULL DEFAULT ''"),
+    ("news_versions", "title", "VARCHAR(1000)"),
+    ("news_versions", "meta_html", "TEXT NOT NULL DEFAULT ''"),
 ]
 OWNED_TABLES = ["sources", "news", "prompts", "parser_runs"]
 # Старый общий ключ настройки → личный ключ

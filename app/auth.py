@@ -15,6 +15,7 @@ _fails: dict[str, list[float]] = defaultdict(list)
 
 DEFAULT_PROMPT_NAME = "Основной: SEO-статья"
 DEFAULT_IMAGE_PROMPT_NAME = "Основной: иллюстрация к статье"
+DEFAULT_TITLE_PROMPT_NAME = "Основной: новый заголовок"
 
 
 def hash_password(password: str) -> str:
@@ -53,10 +54,11 @@ def reset_fails(ip: str) -> None:
 
 
 def seed_user(db, user: User) -> None:
-    """Стартовый набор кабинета: основной промпт для статьи и основной промпт для картинки."""
-    from .services.generator import DEFAULT_IMAGE_PROMPT, DEFAULT_PROMPT
+    """Стартовый набор кабинета: основные промпты для статьи, заголовка и картинки."""
+    from .services.generator import DEFAULT_IMAGE_PROMPT, DEFAULT_PROMPT, DEFAULT_TITLE_PROMPT
 
     for kind, name, text_ in (("text", DEFAULT_PROMPT_NAME, DEFAULT_PROMPT),
+                              ("title", DEFAULT_TITLE_PROMPT_NAME, DEFAULT_TITLE_PROMPT),
                               ("image", DEFAULT_IMAGE_PROMPT_NAME, DEFAULT_IMAGE_PROMPT)):
         if not db.scalar(select(Prompt.id).where(Prompt.user_id == user.id, Prompt.kind == kind).limit(1)):
             db.add(Prompt(user_id=user.id, kind=kind, name=name, text=text_, is_default=True))

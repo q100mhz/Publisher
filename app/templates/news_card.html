@@ -24,6 +24,19 @@
           <label for="title">Заголовок новости</label>
           <textarea id="title" class="title-input" name="title" rows="2" style="min-height:0" required>{{ news.title }}</textarea>
         </div>
+        <div class="field">
+          <label for="new_title">Изменённый заголовок</label>
+          <textarea id="new_title" class="title-input new-title" name="new_title" rows="2" style="min-height:0" data-new-title
+                    placeholder="Появится после генерации статьи или по кнопке ниже">{{ news.new_title or '' }}</textarea>
+          <div class="title-gen">
+            <select data-title-prompt aria-label="Промпт для заголовка">
+              {% for p in title_prompts %}<option value="{{ p.id }}">{{ p.name }}{{ ' (основной)' if p.is_default }}</option>{% endfor %}
+            </select>
+            <button type="button" class="btn-sm" data-generate-title data-url="{{ url('/news/' ~ news.id ~ '/generate-title') }}"
+                    {{ 'disabled' if ai_error or not title_prompts }}>✦ Сгенерировать заголовок</button>
+            <button type="button" class="btn-sm btn-ghost" data-copy-from="[data-new-title]">⧉ Скопировать</button>
+          </div>
+        </div>
         <div class="field-row">
           <div class="field">
             <label for="created_at">Дата создания</label>
@@ -45,6 +58,17 @@
           <h2>Оригинальная новость</h2>
           {% if news.source_url %}<a class="btn btn-ghost btn-sm" href="{{ news.source_url }}" target="_blank" rel="noopener noreferrer">Открыть оригинал ↗</a>{% endif %}
         </div>
+        {% if privacy.counts %}
+        <div class="privacy-note" data-privacy="{{ privacy.text }}">
+          <b>🛡 В статье есть персональные данные: {{ privacy.text }}.</b>
+          Перед отправкой в нейросеть они автоматически заменяются метками вроде [ФИО] и [телефон] — в ИИ они не уходят.
+          Текст здесь, в карточке, не меняется.
+          <details class="fold"><summary class="small">Что найдено</summary>
+            <ul class="small">{% for kind, value in privacy.examples %}<li>{{ kind }}: {{ value }}</li>{% endfor %}</ul>
+            <p class="hint">Поиск идёт по шаблонам и может пропустить необычные варианты записи — просмотрите текст перед генерацией.</p>
+          </details>
+        </div>
+        {% endif %}
         <textarea name="original_text" rows="12" placeholder="Вставьте текст оригинальной новости">{{ news.original_text }}</textarea>
       </div>
 
@@ -64,7 +88,7 @@
               {% for p in prompts %}<option value="{{ p.id }}">{{ p.name }}{{ ' (основной)' if p.is_default }}</option>{% endfor %}
             </select>
           </div>
-          <button type="button" class="btn-lg" data-generate data-url="{{ url('/news/' ~ news.id ~ '/generate') }}"
+          <button type="button" class="btn-lg" data-generate data-privacy="{{ privacy.text }}" data-url="{{ url('/news/' ~ news.id ~ '/generate') }}"
                   data-state-url="{{ url('/news/' ~ news.id ~ '/generation') }}" {{ 'disabled' if ai_error or news.gen_state == 'running' }}>
             ✦ {{ 'Сгенерировать заново' if news.html_code else 'Сгенерировать' }}
           </button>
@@ -85,6 +109,17 @@
         <div data-pane="code" class="hidden">
           <textarea class="code" name="html_code" data-html-code spellcheck="false" placeholder="<h1>Заголовок</h1>…">{{ news.html_code }}</textarea>
           <p class="hint">Код можно править вручную — предпросмотр обновляется сразу. Не забудьте сохранить.</p>
+        </div>
+
+        <div class="meta-block">
+          <div class="card-head" style="margin-bottom:8px">
+            <h3>META-раздел</h3>
+            <button type="button" class="btn-sm btn-dark" data-copy-from="[data-meta]">⧉ Скопировать META</button>
+          </div>
+          <textarea class="code meta-code" name="meta_html" data-meta spellcheck="false"
+                    placeholder="<title>…</title> и <meta name=&quot;description&quot; …> появятся здесь после генерации">{{ news.meta_html }}</textarea>
+          <p class="hint">При генерации <code>&lt;title&gt;</code>, <code>&lt;meta&gt;</code>, canonical и разметка schema.org автоматически
+            вынимаются из текста статьи и попадают сюда. «Скопировать код» копирует только статью.</p>
         </div>
       </div>
 

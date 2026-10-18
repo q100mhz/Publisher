@@ -118,11 +118,13 @@ def card(request: Request, news_id: int, user_id: int = Depends(require_user), d
     prompts = db.scalars(select(Prompt).where(Prompt.user_id == user_id)
                          .order_by(Prompt.is_default.desc(), Prompt.name)).all()
     image_prompts = [p for p in prompts if p.kind == "image"]
-    prompts = [p for p in prompts if p.kind != "image"]
+    title_prompts = [p for p in prompts if p.kind == "title"]
+    prompts = [p for p in prompts if p.kind == "text"]
     return render(
         request, "news_card.html", active="registry", news=news, prompts=prompts,
         statuses=NewsStatus.LABELS, versions=news.versions[:20], history=news.history[:50],
-        ai_error=_ai_error(db, request.state.user), image_prompts=image_prompts,
+        ai_error=_ai_error(db, request.state.user), image_prompts=image_prompts, title_prompts=title_prompts,
+        privacy=generator.privacy_report(news),
         img_error=_img_error(db, request.state.user),
     )
 
@@ -135,6 +137,8 @@ def save(
     created_at: str = Form(""),
     original_text: str = Form(""),
     html_code: str = Form(""),
+    new_title: str = Form(""),
+    meta_html: str = Form(""),
     planned_publish_date: str = Form(""),
     published_at: str = Form(""),
     user_id: int = Depends(require_user),
@@ -147,6 +151,8 @@ def save(
         "created_at": (_parse_datetime(created_at) or news.created_at, "дата создания"),
         "original_text": (original_text, "текст оригинала"),
         "html_code": (html_code, "HTML-код"),
+        "new_title": (new_title.strip()[:1000] or None, "изменённый заголовок"),
+        "meta_html": (meta_html.strip(), "META"),
         "planned_publish_date": (_parse_date(planned_publish_date), "плановая дата публикации"),
         "published_at": (_parse_date(published_at), "фактическая дата публикации"),
     }
@@ -292,7 +298,7 @@ def generate(request: Request, news_id: int, prompt_id: int = Form(...), user_id
     if error:
         return JSONResponse({"ok": False, "error": error}, 400)
     prompt = db.get(Prompt, prompt_id)
-    if not prompt or prompt.user_id != user_id or prompt.kind == "image":
+    if not prompt or prompt.user_id != user_id or prompt.kind != "text":
         return JSONResponse({"ok": False, "error": "Промпт не найден"}, 400)
     if not news.original_text.strip():
         return JSONResponse({"ok": False, "error": "Нет текста оригинальной новости — нечего переделывать"}, 400)
@@ -302,6 +308,26 @@ def generate(request: Request, news_id: int, prompt_id: int = Form(...), user_id
     db.commit()
     executor.submit(generator.generate, news_id, prompt_id)
     return {"ok": True}
+
+
+@router.post("/news/{news_id}/generate-title")
+def generate_title(request: Request, news_id: int, prompt_id: int = Form(...), user_id: int = Depends(require_user),
+                   db: Session = Depends(get_db)):
+    news = _get(db, news_id, user_id)
+    error = _ai_error(db, request.state.user)
+    if error:
+        return JSONResponse({"ok": False, "error": error}, 400)
+    prompt = db.get(Prompt, prompt_id)
+    if not prompt or prompt.user_id != user_id or prompt.kind != "title":
+        return JSONResponse({"ok": False, "error": "Промпт для заголовка не найден"}, 400)
+    if not (news.original_text.strip() or news.title.strip()):
+        return JSONResponse({"ok": False, "error": "Нет текста новости — не из чего делать заголовок"}, 400)
+    db.close()
+    try:
+        title = generator.generate_title(news_id, prompt_id)
+    except ai.AIError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, 400)
+    return {"ok": True, "title": title}
 
 
 @router.post("/news/{news_id}/generate-image")
@@ -342,6 +368,9 @@ def restore_version(request: Request, news_id: int, version_id: int, user_id: in
         raise HTTPException(404)
     news = _get(db, news_id, user_id)
     news.html_code = version.html_code
+    news.meta_html = version.meta_html or ""
+    if version.title:
+        news.new_title = version.title
     db.add(NewsHistory(news_id=news_id, action=f"Восстановлена версия от {version.created_at:%d.%m.%Y %H:%M}"))
     db.commit()
     flash(request, "Версия восстановлена")

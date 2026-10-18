@@ -1,8 +1,8 @@
 """Подключение к нейросетям. У каждого пользователя свой провайдер, модель и API-ключ.
 
-Большинство сервисов (DeepSeek, OpenAI, OpenRouter, многие российские и локальные модели)
-понимают один и тот же формат запросов — «OpenAI-совместимый». Для них хватает адреса API.
-Claude (Anthropic) подключается через собственный SDK Anthropic.
+Большинство сервисов (DeepSeek, Qwen, Gemini, OpenAI, OpenRouter, локальные модели) понимают
+один и тот же формат запросов — «OpenAI-совместимый». Для них хватает адреса API.
+Claude (Anthropic) подключается через собственный SDK Anthropic, картинки Qwen — через API Qwen.
 """
 from __future__ import annotations
 
@@ -12,58 +12,63 @@ from ..config import DEEPSEEK_BASE_URL, DEEPSEEK_MODEL
 from ..crypto import decrypt, mask
 from ..models import User, get_setting
 
+QWEN_BASE_URL = "https://dashscope-intl.aliyuncs.com/compatible-mode/v1"
+GEMINI_BASE_URL = "https://generativelanguage.googleapis.com/v1beta/openai/"
+
+# images — как сервис рисует картинки по тому же ключу: None — не умеет,
+# "openai" — формат OpenAI Images, "gemini" — то же с ответом в base64, "qwen" — собственный API Qwen.
+# editable_base — пользователь может (или должен, если base_url пуст) указать свой адрес API.
 PROVIDERS: dict[str, dict] = {
     "deepseek": {
-        "label": "DeepSeek",
-        "kind": "openai",
-        "base_url": DEEPSEEK_BASE_URL,
-        "models": ["deepseek-chat", "deepseek-reasoner"],
-        "default_model": DEEPSEEK_MODEL,
-        "key_url": "https://platform.deepseek.com/api_keys",
-        "temperature": True,
-        "images": False,  # умеет ли создавать картинки по тому же ключу
+        "label": "DeepSeek", "kind": "openai", "base_url": DEEPSEEK_BASE_URL, "editable_base": False,
+        "models": ["deepseek-chat", "deepseek-reasoner"], "default_model": DEEPSEEK_MODEL,
+        "key_url": "https://platform.deepseek.com/api_keys", "temperature": True,
+        "images": None, "image_models": [],
+    },
+    "qwen": {
+        "label": "Qwen (Alibaba Cloud Model Studio)", "kind": "openai", "base_url": QWEN_BASE_URL,
+        "editable_base": True,
+        "models": ["qwen3.8-max", "qwen-plus", "qwen-max", "qwen-turbo"], "default_model": "qwen-plus",
+        "key_url": "https://www.alibabacloud.com/help/en/model-studio/get-api-key", "temperature": True,
+        "images": "qwen", "image_models": ["qwen-image-2.0-pro", "qwen-image-3.0-pro"],
+    },
+    "gemini": {
+        "label": "Google Gemini", "kind": "openai", "base_url": GEMINI_BASE_URL, "editable_base": False,
+        "models": ["gemini-3.8-flash"], "default_model": "gemini-3.8-flash",
+        "key_url": "https://aistudio.google.com/app/apikey", "temperature": True,
+        "images": "gemini", "image_models": ["gemini-2.5-flash-image", "gemini-3-pro-image-preview"],
     },
     "openai": {
-        "label": "OpenAI (ChatGPT)",
-        "kind": "openai",
-        "base_url": "https://api.openai.com/v1",
-        "models": [],
-        "default_model": "",
-        "key_url": "https://platform.openai.com/api-keys",
-        "temperature": True,
-        "images": True,  # умеет ли создавать картинки по тому же ключу
+        "label": "OpenAI (ChatGPT)", "kind": "openai", "base_url": "https://api.openai.com/v1",
+        "editable_base": False, "models": [], "default_model": "",
+        "key_url": "https://platform.openai.com/api-keys", "temperature": True,
+        "images": "openai", "image_models": ["gpt-image-1", "dall-e-3"],
     },
     "anthropic": {
-        "label": "Anthropic (Claude)",
-        "kind": "anthropic",
-        "base_url": "",
-        "models": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"],
-        "default_model": "claude-opus-5-5",
+        "label": "Anthropic (Claude)", "kind": "anthropic", "base_url": "", "editable_base": False,
+        "models": ["claude-opus-5-5", "claude-sonnet-5-5", "claude-haiku-5-5"], "default_model": "claude-opus-5-5",
         "key_url": "https://platform.claude.com/settings/keys",
         "temperature": False,  # у текущих моделей Claude температура не настраивается
-        "images": False,  # умеет ли создавать картинки по тому же ключу
+        "images": None, "image_models": [],
     },
     "openrouter": {
-        "label": "OpenRouter (сотни моделей по одному ключу)",
-        "kind": "openai",
-        "base_url": "https://openrouter.ai/api/v1",
-        "models": [],
-        "default_model": "",
-        "key_url": "https://openrouter.ai/keys",
-        "temperature": True,
-        "images": False,  # умеет ли создавать картинки по тому же ключу
+        "label": "OpenRouter (сотни моделей по одному ключу)", "kind": "openai",
+        "base_url": "https://openrouter.ai/api/v1", "editable_base": False, "models": [], "default_model": "",
+        "key_url": "https://openrouter.ai/keys", "temperature": True,
+        "images": None, "image_models": [],
     },
     "custom": {
-        "label": "Другой OpenAI-совместимый API",
-        "kind": "openai",
-        "base_url": "",
-        "models": [],
-        "default_model": "",
-        "key_url": "",
-        "temperature": True,
-        "images": True,  # умеет ли создавать картинки по тому же ключу
+        "label": "Другой OpenAI-совместимый API", "kind": "openai", "base_url": "", "editable_base": True,
+        "models": [], "default_model": "", "key_url": "", "temperature": True,
+        "images": "openai", "image_models": [],
     },
 }
+
+
+def _base_url(provider: str, custom: str) -> str:
+    info = PROVIDERS[provider]
+    return (custom.strip() if info["editable_base"] and custom.strip() else info["base_url"]).strip()
+
 
 # Модели Claude, для которых Anthropic умеет сама переотправить запрос другой модели,
 # если основная откажется отвечать (защитные фильтры могут сработать и на безобидный текст)
@@ -94,7 +99,7 @@ def user_config(db, user: User) -> AIConfig:
         provider = "deepseek"
     info = PROVIDERS[provider]
     model = get_setting(db, user.id, "ai_model", "") or info["default_model"]
-    base_url = (get_setting(db, user.id, "ai_base_url", "") if provider == "custom" else info["base_url"]).strip()
+    base_url = _base_url(provider, get_setting(db, user.id, "ai_base_url", ""))
     temperature = None
     if info["temperature"]:
         try:
@@ -138,15 +143,18 @@ def describe(db, user: User) -> dict:
 IMAGE_PROVIDERS = {
     "": "Не указан — использовать основную нейросеть",
     "openai": "OpenAI (картинки)",
+    "gemini": "Google Gemini (картинки)",
+    "qwen": "Qwen (картинки)",
     "custom": "Другой API в формате OpenAI Images",
 }
-IMAGE_MODEL_HINTS = {"openai": ["gpt-image-1", "dall-e-3"], "custom": []}
+IMAGE_MODEL_HINTS = {key: PROVIDERS[key]["image_models"] for key in IMAGE_PROVIDERS if key}
 IMAGE_SIZES = ["1024x1024", "1536x1024", "1024x1536", "1792x1024", "1024x1792"]
 
 
 @dataclass
 class ImageConfig:
     label: str
+    kind: str      # openai / gemini / qwen — формат запроса
     model: str
     api_key: str
     base_url: str
@@ -168,21 +176,22 @@ def image_config(db, user: User) -> ImageConfig:
     model = get_setting(db, user.id, "img_model", "").strip()
     size = get_setting(db, user.id, "img_size", "") or IMAGE_SIZES[0]
 
-    if provider in ("openai", "custom") and key:
-        base_url = (PROVIDERS["openai"]["base_url"] if provider == "openai"
-                    else get_setting(db, user.id, "img_base_url", "").strip())
+    if provider in PROVIDERS and key:
+        base_url = _base_url(provider, get_setting(db, user.id, "img_base_url", ""))
         if not base_url:
             raise AIError("Не указан адрес API для картинок. Откройте «Настройки» → «Картинки».")
-        label, separate = IMAGE_PROVIDERS[provider], True
+        kind, label, separate = PROVIDERS[provider]["images"], IMAGE_PROVIDERS[provider], True
     else:
         main = user_config(db, user)
-        if not PROVIDERS[main.provider].get("images"):
+        kind = PROVIDERS[main.provider]["images"]
+        if not kind:
             raise AIError(f"Отдельный API для картинок не указан, а основная нейросеть ({main.label}) "
                           "картинки создавать не умеет. Откройте «Настройки» → «Картинки» и укажите сервис и ключ.")
         key, base_url, label, separate = main.api_key, main.base_url, main.label, False
+        model = model or (PROVIDERS[main.provider]["image_models"] or [""])[0]
     if not model:
         raise AIError("Не указана модель для картинок. Откройте «Настройки» → «Картинки».")
-    return ImageConfig(label, model, key, base_url, size, separate)
+    return ImageConfig(label, kind, model, key, base_url, size, separate)
 
 
 def describe_images(db, user: User) -> dict:
@@ -198,16 +207,31 @@ def describe_images(db, user: User) -> dict:
     }
 
 
+def _download(url: str) -> bytes:
+    import httpx
+
+    try:
+        result = httpx.get(url, timeout=60, follow_redirects=True)
+        result.raise_for_status()
+        return result.content
+    except httpx.HTTPError as e:
+        raise AIError(f"Картинка создана, но скачать её не удалось: {e}")
+
+
 def generate_image(cfg: ImageConfig, prompt: str) -> bytes:
     """Создаёт одну картинку и возвращает её байты."""
+    if cfg.kind == "qwen":
+        return _generate_image_qwen(cfg, prompt)
     import base64
 
-    import httpx
     import openai
 
     client = openai.OpenAI(api_key=cfg.api_key, base_url=cfg.base_url, timeout=240, max_retries=1)
+    params = {"model": cfg.model, "prompt": prompt, "size": cfg.size, "n": 1}
+    if cfg.kind == "gemini":
+        params["response_format"] = "b64_json"  # Gemini отдаёт картинку прямо в ответе
     try:
-        response = client.images.generate(model=cfg.model, prompt=prompt, size=cfg.size, n=1)
+        response = client.images.generate(**params)
     except openai.AuthenticationError:
         raise AIError("Ключ API для картинок не подошёл. Проверьте его в «Настройках».")
     except openai.NotFoundError:
@@ -224,13 +248,39 @@ def generate_image(cfg: ImageConfig, prompt: str) -> bytes:
     if getattr(item, "b64_json", None):
         return base64.b64decode(item.b64_json)
     if getattr(item, "url", None):
-        try:
-            result = httpx.get(item.url, timeout=60, follow_redirects=True)
-            result.raise_for_status()
-            return result.content
-        except httpx.HTTPError as e:
-            raise AIError(f"Картинка создана, но скачать её не удалось: {e}")
+        return _download(item.url)
     raise AIError("Сервис картинок не вернул ни картинку, ни ссылку на неё")
+
+
+def _generate_image_qwen(cfg: ImageConfig, prompt: str) -> bytes:
+    """Qwen рисует через собственный API Model Studio (синхронный вызов multimodal-generation)."""
+    import httpx
+
+    root = cfg.base_url.rstrip("/")
+    root = root[: -len("/compatible-mode/v1")] if root.endswith("/compatible-mode/v1") else root
+    url = f"{root}/api/v1/services/aigc/multimodal-generation/generation"
+    body = {
+        "model": cfg.model,
+        "input": {"messages": [{"role": "user", "content": [{"text": prompt}]}]},
+        "parameters": {"watermark": False, "size": cfg.size.replace("x", "*")},
+    }
+    try:
+        response = httpx.post(url, json=body, timeout=240, headers={"Authorization": f"Bearer {cfg.api_key}"})
+    except httpx.HTTPError as e:
+        raise AIError(f"Не удалось связаться с {root}: {e}")
+    try:
+        data = response.json()
+    except ValueError:
+        raise AIError(f"Qwen вернул непонятный ответ (HTTP {response.status_code})")
+    if response.status_code >= 400 or data.get("code"):
+        if response.status_code == 401:
+            raise AIError("Ключ API Qwen не подошёл. Проверьте его в «Настройках».")
+        raise AIError(f"Qwen вернул ошибку {data.get('code') or response.status_code}: {data.get('message', '')}")
+    try:
+        image_url = data["output"]["choices"][0]["message"]["content"][0]["image"]
+    except (KeyError, IndexError, TypeError):
+        raise AIError("Qwen не вернул ссылку на картинку")
+    return _download(image_url)
 
 
 def complete(cfg: AIConfig, system: str, prompt: str, *, quick_test: bool = False) -> str:

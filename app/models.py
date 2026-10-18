@@ -101,7 +101,7 @@ class Prompt(Base):
     user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     text: Mapped[str] = mapped_column(Text)
-    kind: Mapped[str] = mapped_column(String(20), default="text")  # text — для статьи, image — для картинки
+    kind: Mapped[str] = mapped_column(String(20), default="text")  # text — статья, title — заголовок, image — картинка
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)  # основной в своём виде
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=now, onupdate=now)
@@ -127,6 +127,8 @@ class News(Base):
     # HTML-код переделанной новости (ответ нейросети или ручной ввод).
     # «Текст переделанной новости» в карточке — это он же, показанный так, как увидит читатель.
     html_code: Mapped[str] = mapped_column(Text, default="")
+    new_title: Mapped[str | None] = mapped_column(String(1000), nullable=True)  # изменённый заголовок
+    meta_html: Mapped[str] = mapped_column(Text, default="")  # <title>, <meta>… — вынесены из текста статьи
 
     status: Mapped[str] = mapped_column(String(20), default=NewsStatus.NEW, index=True)
     planned_publish_date: Mapped[date | None] = mapped_column(Date, nullable=True)
@@ -206,6 +208,8 @@ class NewsVersion(Base):
     id: Mapped[int] = mapped_column(primary_key=True)
     news_id: Mapped[int] = mapped_column(ForeignKey("news.id"), index=True)
     html_code: Mapped[str] = mapped_column(Text)
+    title: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    meta_html: Mapped[str] = mapped_column(Text, default="")
     prompt_name: Mapped[str] = mapped_column(String(200), default="")
     model: Mapped[str] = mapped_column(String(100), default="")
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)

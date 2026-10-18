@@ -8,7 +8,7 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import client_ip, is_locked, register_fail, require_user, reset_fails, verify_password
 from ..db import get_db
 from ..models import News, NewsHistory, NewsStatus, ParserRun, Source, User, now
-from ..services import scheduler
+from ..services import pii, scheduler
 from ..web import flash, redirect, render
 
 router = APIRouter()
@@ -120,10 +120,11 @@ def index(
     items = db.scalars(query.order_by(News.created_at.desc(), News.id.asc())
                        .offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE)).all()
 
+    pii_rows = {n.id: pii.describe(pii.summary(pii.find(f"{n.title}\n{n.original_text}"))) for n in items}
     last_run = db.scalar(select(ParserRun).where(ParserRun.user_id == user_id).order_by(ParserRun.id.desc()).limit(1))
     filters = dict(period=period, status=status, source=source, q=q, archive=archive, dup=dup, publish=publish)
     return render(
-        request, "index.html", active="registry", stats=stats, items=items, total=total, page=page,
+        request, "index.html", active="registry", stats=stats, items=items, total=total, page=page, pii_rows=pii_rows,
         pages=pages, filters=filters, periods=PERIODS, statuses=NewsStatus.LABELS,
         sources=db.scalars(select(Source).where(Source.user_id == user_id).order_by(Source.name)).all(),
         last_run=last_run, auto_enabled=scheduler.is_enabled(user_id), next_run=scheduler.next_run_time(user_id),

@@ -19,7 +19,7 @@
             <option value="{{ key }}" {{ 'selected' if ai_settings.provider == key }}
                     data-models="{{ p.models|join('|') }}" data-default-model="{{ p.default_model }}"
                     data-key-url="{{ p.key_url }}" data-temperature="{{ '1' if p.temperature else '0' }}"
-                    data-custom="{{ '1' if key == 'custom' else '0' }}">{{ p.label }}</option>
+                    data-editable="{{ '1' if p.editable_base else '0' }}" data-base="{{ p.base_url }}">{{ p.label }}</option>
           {% endfor %}
         </select>
         <p class="hint" data-key-link></p>
@@ -27,20 +27,20 @@
 
       <div class="field" data-base-url-field>
         <label for="base_url">Адрес API</label>
-        <input id="base_url" type="url" name="base_url" value="{{ ai_settings.base_url }}" placeholder="https://example.com/v1">
-        <p class="hint">Для любого сервиса с OpenAI-совместимым API: российские модели через шлюзы, локальные модели и т. п.</p>
+        <input id="base_url" type="url" name="base_url" value="{{ ai_settings.base_url }}" placeholder="https://example.com/v1" data-base-url autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
+        <p class="hint" data-base-hint>Для любого сервиса с OpenAI-совместимым API: российские модели через шлюзы, локальные модели и т. п.</p>
       </div>
 
       <div class="field">
         <label for="model">Модель</label>
-        <input id="model" type="text" name="model" value="{{ ai_settings.model }}" list="model-list" data-model autocomplete="off">
+        <input id="model" type="text" name="ai_model_name" value="{{ ai_settings.model }}" list="model-list" data-model autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
         <datalist id="model-list" data-model-list></datalist>
         <p class="hint" data-model-hint></p>
       </div>
 
       <div class="field">
         <label for="api_key">API-ключ</label>
-        <input id="api_key" type="password" name="api_key" autocomplete="off"
+        <input id="api_key" type="text" class="secret-input" name="api_key" spellcheck="false" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
                placeholder="{{ 'сохранён: ' ~ ai_settings.key_mask ~ ' — оставьте пустым, чтобы не менять' if ai_settings.key_mask else 'вставьте ключ' }}">
         {% if ai_settings.key_broken %}<p class="hint" style="color:var(--red)">Сохранённый ключ не читается — вставьте его заново.</p>{% endif %}
         {% if ai_settings.key_mask %}
@@ -79,12 +79,12 @@
       </div>
       <div class="field" data-img-base-url>
         <label for="img_base_url">Адрес API</label>
-        <input id="img_base_url" type="url" name="base_url" value="{{ img_settings.base_url }}" placeholder="https://example.com/v1">
-        <p class="hint">Сервис должен принимать запросы в формате OpenAI Images (<code>/images/generations</code>).</p>
+        <input id="img_base_url" type="url" name="base_url" value="{{ img_settings.base_url }}" placeholder="https://example.com/v1" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
+        <p class="hint" data-img-base-hint>Сервис должен принимать запросы в формате OpenAI Images (<code>/images/generations</code>).</p>
       </div>
       <div class="field" data-img-key>
         <label for="img_api_key">API-ключ для картинок</label>
-        <input id="img_api_key" type="password" name="api_key" autocomplete="off"
+        <input id="img_api_key" type="text" class="secret-input" name="api_key" spellcheck="false" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
                placeholder="{{ 'сохранён: ' ~ img_settings.key_mask ~ ' — оставьте пустым, чтобы не менять' if img_settings.key_mask else 'вставьте ключ' }}">
         {% if img_settings.key_broken %}<p class="hint" style="color:var(--red)">Сохранённый ключ не читается — вставьте его заново.</p>{% endif %}
         {% if img_settings.key_mask %}<label class="check-inline"><input type="checkbox" name="remove_key" value="1"> Удалить сохранённый ключ</label>{% endif %}
@@ -92,7 +92,7 @@
       <div class="field-row">
         <div class="field">
           <label for="img_model">Модель для картинок</label>
-          <input id="img_model" type="text" name="model" value="{{ img_settings.model }}" list="img-model-list" autocomplete="off" placeholder="например, gpt-image-1">
+          <input id="img_model" type="text" name="img_model_name" value="{{ img_settings.model }}" list="img-model-list" placeholder="например, gpt-image-1" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other">
           <datalist id="img-model-list" data-img-model-list></datalist>
         </div>
         <div class="field">

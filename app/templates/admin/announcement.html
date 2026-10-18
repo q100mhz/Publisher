@@ -1,0 +1,20 @@
+{% extends "admin/base.html" %}
+{% block title %}Объявление{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Объявление для пользователей</h1></div>
+<div class="card" style="max-width:760px">
+  <p class="muted" style="margin-top:0">Показывается полосой вверху каждой страницы во всех кабинетах. Пустое поле — объявления нет.</p>
+  {% if text %}<div class="announcement {{ kind }}" style="border-radius:14px;margin-bottom:16px">📣 {{ text }}</div>{% endif %}
+  <form method="post" action="{{ aurl('/announcement') }}">
+    <div class="field"><label for="text">Текст</label>
+      <textarea id="text" name="text" rows="3" maxlength="500" placeholder="Например: 20 октября с 22:00 до 23:00 плановые работы">{{ text }}</textarea></div>
+    <div class="field" style="max-width:260px"><label for="kind">Вид</label>
+      <select id="kind" name="kind"><option value="info" {{ 'selected' if kind == 'info' }}>Информация (жёлтый)</option>
+        <option value="warn" {{ 'selected' if kind == 'warn' }}>Важно (красный)</option></select></div>
+    <div style="display:flex;gap:10px">
+      <button type="submit">Опубликовать</button>
+      {% if text %}<button type="submit" class="btn-ghost" name="text" value="">Снять объявление</button>{% endif %}
+    </div>
+  </form>
+</div>
+{% endblock %}

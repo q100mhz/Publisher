@@ -9,14 +9,18 @@
       <p class="muted" style="margin:0 0 24px">Реестр публикаций, парсер новостей и генерация статей</p>
       {% if error %}<div class="err">{{ error }}</div>{% endif %}
       <div class="field">
-        <label for="login">Логин</label>
-        <input id="login" name="login" type="text" value="{{ login or '' }}" autocomplete="username" required autofocus>
+        <label for="login">E-mail</label>
+        <input id="login" name="login" type="email" value="{{ login or '' }}" autocomplete="email" required autofocus>
       </div>
       <div class="field">
         <label for="password">Пароль</label>
         <input id="password" name="password" type="password" autocomplete="current-password" required>
       </div>
       <button class="btn-lg" type="submit" style="width:100%;margin-top:6px">Войти</button>
+      {% if registration_enabled %}
+      <p class="muted small" style="text-align:center;margin:16px 0 0">Нет аккаунта? <a href="{{ url('/register') }}">Зарегистрироваться</a></p>
+      {% endif %}
+      <p class="hint" style="text-align:center">Забыли пароль? Напишите администратору сервиса.</p>
     </form>
   </div>
 </div>

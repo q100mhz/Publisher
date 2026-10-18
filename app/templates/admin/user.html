@@ -1,0 +1,104 @@
+{% extends "admin/base.html" %}
+{% block title %}{{ u.login }}{% endblock %}
+{% block content %}
+<div class="page-head">
+  <div><a class="small" href="{{ aurl('/users') }}">← Пользователи</a><h1 style="margin-top:6px">{{ u.login }}</h1></div>
+  <div class="status-big">
+    {% if u.is_active %}<span class="chip s-published">доступ есть</span>{% else %}<span class="chip overdue">заблокирован</span>{% endif %}
+    <span class="chip light">с {{ u.created_at|d }}</span>
+  </div>
+</div>
+
+{% if temp_password %}
+<div class="card temp-password">
+  <h3>Временный пароль</h3>
+  <p>Передайте пользователю. Он показывается <b>один раз</b> — после обновления страницы его уже не увидеть.</p>
+  <div class="temp-value"><code data-temp>{{ temp_password }}</code>
+    <button type="button" class="btn-sm btn-dark" data-copy-from="[data-temp-input]">⧉ Скопировать</button></div>
+  <input type="hidden" value="{{ temp_password }}" data-temp-input>
+  <p class="hint">Пользователь может сменить его сам в «Настройках» кабинета.</p>
+</div>
+{% endif %}
+
+<div class="settings-grid">
+  <div>
+    <div class="card">
+      <h2 style="margin-bottom:12px">Активность</h2>
+      <dl class="kv">
+        <dt>Регистрация</dt><dd>{{ u.created_at|dt }} ({{ {'signup': 'сам, по e-mail', 'cli': 'из терминала', 'admin': 'админка'}.get(u.registered_via, u.registered_via) }})</dd>
+        <dt>Последний вход</dt><dd>{{ u.last_login_at|dt }}</dd>
+        <dt>Был на сайте</dt><dd>{{ u.last_seen_at|dt }}</dd>
+        <dt>Источников</dt><dd>{{ info.sources|length }}</dd>
+        <dt>Спарсено статей</dt><dd>{{ info.parsed }}</dd>
+        <dt>Всего новостей</dt><dd>{{ info.news }} (опубликовано {{ info.published }})</dd>
+        <dt>Генерации 30 дн.</dt><dd>
+          {% for kind, ok, n in info.gen30 %}{{ {'text': 'статьи', 'title': 'заголовки', 'image': 'картинки'}.get(kind, kind) }}{{ '' if ok else ' (ошибки)' }} — {{ n }}{{ '; ' if not loop.last }}{% else %}нет{% endfor %}</dd>
+      </dl>
+      {% if info.sources %}
+      <h3 style="margin:18px 0 8px">Источники</h3>
+      <table class="mini-table wide">
+        {% for name, url, active, status, run_at in info.sources %}
+        <tr><td><b>{{ name }}</b><div class="small muted">{{ url }}</div></td>
+          <td class="small nowrap">{{ run_at|dt }}</td>
+          <td>{% if status == 'error' %}<span class="chip overdue">ошибка</span>{% elif not active %}<span class="chip archived">исключён</span>{% else %}<span class="chip s-published">ок</span>{% endif %}</td></tr>
+        {% endfor %}
+      </table>
+      {% endif %}
+      <p class="hint">Содержимое кабинета (новости и тексты) администратору не показывается.</p>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:12px">Доступы</h2>
+      <form method="post" action="{{ aurl('/users/' ~ u.id ~ '/access') }}">
+        <label class="check-inline"><input type="checkbox" name="base_ai" value="1" {{ 'checked' if u.base_ai_allowed }}> Разрешить базовый DeepSeek сервиса</label>
+        <p class="hint">Используется, только если у пользователя нет своего ключа DeepSeek. Свой ключ всегда в приоритете.
+          {% if not base_key %}<b style="color:var(--red)">Базовый ключ не задан в .env на сервере.</b>{% endif %}</p>
+        <div class="field" style="max-width:260px">
+          <label for="limit">Лимит генераций в месяц</label>
+          <input id="limit" type="number" min="0" name="limit" value="{{ u.ai_monthly_limit if u.ai_monthly_limit is not none else '' }}" placeholder="пусто — без лимита">
+          <p class="hint">Использовано в этом месяце: {{ info.base_used }}</p>
+        </div>
+        <label class="check-inline"><input type="checkbox" name="bitrix" value="1" {{ 'checked' if u.bitrix_allowed }}> Разрешить публикацию в Битрикс24</label>
+        <p class="hint">После разрешения в настройках кабинета появится блок «Битрикс24».</p>
+        <button type="submit" style="margin-top:8px">Сохранить доступы</button>
+      </form>
+    </div>
+  </div>
+
+  <div>
+    <div class="card">
+      <h2 style="margin-bottom:12px">Учётная запись</h2>
+      <form method="post" action="{{ aurl('/users/' ~ u.id ~ '/login') }}" class="field">
+        <label for="login">E-mail (по нему пользователь входит)</label>
+        {% if u.login is not email %}<p class="gen-status error small">Сейчас это не e-mail — войти пользователь не сможет. Замените на его e-mail.</p>{% endif %}
+        <div class="inline-form"><input id="login" type="email" name="login" value="{{ u.login if u.login is email else '' }}" placeholder="name@example.com" required>
+          <button class="btn-sm">Сохранить</button></div>
+      </form>
+      <form method="post" action="{{ aurl('/users/' ~ u.id ~ '/password') }}" class="field">
+        <label for="pw">Новый пароль</label>
+        <div class="inline-form"><input id="pw" type="text" name="password" minlength="8" placeholder="минимум 8 символов" autocomplete="off">
+          <button class="btn-sm">Задать</button></div>
+      </form>
+      <form method="post" action="{{ aurl('/users/' ~ u.id ~ '/password') }}">
+        <input type="hidden" name="generate" value="1">
+        <button class="btn-sm btn-yellow" data-confirm="Сгенерировать временный пароль? Старый пароль перестанет работать, все сессии пользователя завершатся.">Сгенерировать временный пароль</button>
+      </form>
+      <div class="side-actions" style="margin-top:16px">
+        <form method="post" action="{{ aurl('/users/' ~ u.id ~ '/sessions') }}">
+          <button class="btn-ghost" data-confirm="Завершить все сессии пользователя? Ему придётся войти заново.">Завершить все сессии</button></form>
+        <form method="post" action="{{ aurl('/users/' ~ u.id ~ '/toggle-active') }}">
+          {% if u.is_active %}<button class="btn-red" data-confirm="Заблокировать {{ u.login }}? Данные сохранятся, войти он не сможет.">Заблокировать</button>
+          {% else %}<button class="btn-green">Разблокировать</button>{% endif %}</form>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2 style="margin-bottom:12px">Действия администраторов</h2>
+      <ul class="timeline">
+        {% for a in info.audit %}<li><div><time>{{ a.created_at|dt }} · {{ a.admin_login }}</time>{{ a.action }}</div></li>
+        {% else %}<li><div class="muted">Пока ничего</div></li>{% endfor %}
+      </ul>
+    </div>
+  </div>
+</div>
+{% endblock %}

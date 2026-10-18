@@ -7,7 +7,7 @@ from fastapi import Request
 from fastapi.responses import RedirectResponse
 from fastapi.templating import Jinja2Templates
 
-from .config import BASE_PATH
+from .config import BASE_PATH, REGISTRATION_ENABLED
 
 templates = Jinja2Templates(directory=str(Path(__file__).parent / "templates"))
 
@@ -58,4 +58,11 @@ def render(request: Request, name: str, **context):
     context.setdefault("active", "")
     context.setdefault("user", getattr(request.state, "user", None))
     context.setdefault("theme", getattr(request.state, "theme", "auto"))
+    context.setdefault("registration_enabled", REGISTRATION_ENABLED)
+    if context["user"]:
+        from .db import SessionLocal
+        from .models import get_global
+        with SessionLocal() as db:
+            context.setdefault("announcement", get_global(db, "announcement", ""))
+            context.setdefault("announcement_kind", get_global(db, "announcement_kind", "info"))
     return templates.TemplateResponse(request, name, {"flashes": pop_flash(request), "today": date.today(), **context})

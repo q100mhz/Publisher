@@ -19,7 +19,8 @@
             <option value="{{ key }}" {{ 'selected' if ai_settings.provider == key }}
                     data-models="{{ p.models|join('|') }}" data-default-model="{{ p.default_model }}"
                     data-key-url="{{ p.key_url }}" data-temperature="{{ '1' if p.temperature else '0' }}"
-                    data-editable="{{ '1' if p.editable_base else '0' }}" data-base="{{ p.base_url }}">{{ p.label }}</option>
+                    data-editable="{{ '1' if p.editable_base else '0' }}" data-base="{{ p.base_url }}"
+                    data-key-mask="{{ ai_settings.key_masks.get(key, '') }}">{{ p.label }}</option>
           {% endfor %}
         </select>
         <p class="hint" data-key-link></p>
@@ -41,10 +42,13 @@
       <div class="field">
         <label for="api_key">API-ключ</label>
         <input id="api_key" type="text" class="secret-input" name="api_key" spellcheck="false" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-               placeholder="{{ 'сохранён: ' ~ ai_settings.key_mask ~ ' — оставьте пустым, чтобы не менять' if ai_settings.key_mask else 'вставьте ключ' }}">
-        {% if ai_settings.key_broken %}<p class="hint" style="color:var(--red)">Сохранённый ключ не читается — вставьте его заново.</p>{% endif %}
-        {% if ai_settings.key_mask %}
-          <label class="check-inline"><input type="checkbox" name="remove_key" value="1"> Удалить сохранённый ключ</label>
+               placeholder="вставьте ключ" data-key-input>
+        <p class="hint">У каждого сервиса свой ключ — при переключении сервиса сохранённые ключи не теряются.</p>
+        <label class="check-inline" data-remove-key><input type="checkbox" name="remove_key" value="1"> Удалить сохранённый ключ этого сервиса</label>
+        {% if ai_settings.base_allowed %}
+        <p class="base-key-note" data-base-note>Администратор разрешил вам базовый ключ DeepSeek сервиса: если своего ключа DeepSeek нет, генерация идёт через него.
+          {% if ai_settings.base_limit is not none %}Использовано в этом месяце: <b>{{ ai_settings.base_used }} из {{ ai_settings.base_limit }}</b>.{% else %}Использовано в этом месяце: <b>{{ ai_settings.base_used }}</b>.{% endif %}
+          Свой ключ всегда используется в приоритете.</p>
         {% endif %}
       </div>
 
@@ -73,7 +77,8 @@
         <label for="img_provider">Сервис для картинок</label>
         <select id="img_provider" name="provider" data-img-provider>
           {% for key, label in img_providers.items() %}
-            <option value="{{ key }}" {{ 'selected' if img_settings.provider == key }} data-models="{{ img_models.get(key, [])|join('|') }}">{{ label }}</option>
+            <option value="{{ key }}" {{ 'selected' if img_settings.provider == key }} data-models="{{ img_models.get(key, [])|join('|') }}"
+                    data-key-mask="{{ img_settings.key_masks.get(key, '') }}">{{ label }}</option>
           {% endfor %}
         </select>
       </div>
@@ -85,9 +90,8 @@
       <div class="field" data-img-key>
         <label for="img_api_key">API-ключ для картинок</label>
         <input id="img_api_key" type="text" class="secret-input" name="api_key" spellcheck="false" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
-               placeholder="{{ 'сохранён: ' ~ img_settings.key_mask ~ ' — оставьте пустым, чтобы не менять' if img_settings.key_mask else 'вставьте ключ' }}">
-        {% if img_settings.key_broken %}<p class="hint" style="color:var(--red)">Сохранённый ключ не читается — вставьте его заново.</p>{% endif %}
-        {% if img_settings.key_mask %}<label class="check-inline"><input type="checkbox" name="remove_key" value="1"> Удалить сохранённый ключ</label>{% endif %}
+               placeholder="вставьте ключ" data-img-key-input>
+        <label class="check-inline" data-img-remove-key><input type="checkbox" name="remove_key" value="1"> Удалить сохранённый ключ этого сервиса</label>
       </div>
       <div class="field-row">
         <div class="field">
@@ -110,6 +114,51 @@
   </div>
 
   <div>
+  {% if bitrix %}
+  <div class="card bitrix-card" id="bitrix" data-bitrix data-sites-url="{{ url('/settings/bitrix/sites') }}" data-pages-url="{{ url('/settings/bitrix/pages') }}">
+    <h2 style="margin-bottom:6px">Битрикс24</h2>
+    <p class="hint" style="margin:0 0 14px">Публикация статей в раздел «Сайты» вашего портала одной кнопкой из карточки новости.</p>
+    <details class="fold" {{ 'open' if not bitrix.webhook_mask }}><summary class="small">Как подготовить портал</summary>
+      <ol class="small steps">
+        <li>В Битрикс24 откройте «Разработчикам» → «Другое» → «Входящий вебхук». Отметьте право <b>«Сайты (landing)»</b>, сохраните и скопируйте адрес вебхука.</li>
+        <li>В нужном сайте создайте страницу-шаблон статьи: шапка, подвал, оформление. Добавьте блок <b>«HTML-код»</b> и впишите в него <code>%%ARTICLE%%</code> — сюда встанет текст статьи.</li>
+        <li>По желанию: <code>%%TITLE%%</code> — заголовок, <code>%%IMAGE%%</code> — первая картинка (сначала из колонки ИИ). Метки можно поставить в любые блоки шаблона.</li>
+        <li>Вставьте адрес вебхука ниже, нажмите «Загрузить сайты», выберите сайт и страницу-шаблон. Новые статьи появятся в той же папке, где лежит шаблон.</li>
+      </ol>
+    </details>
+    <form method="post" action="{{ url('/settings/bitrix') }}" data-bitrix-form>
+      <div class="field">
+        <label for="bx_webhook">Адрес входящего вебхука</label>
+        <input id="bx_webhook" type="text" class="secret-input" name="webhook" spellcheck="false" autocomplete="off" data-1p-ignore data-lpignore="true" data-bwignore data-form-type="other"
+               placeholder="{{ 'сохранён: ' ~ bitrix.webhook_mask ~ ' — оставьте пустым, чтобы не менять' if bitrix.webhook_mask else 'https://ваш-портал.bitrix24.ru/rest/1/xxxxxxxxxxxx/' }}" data-bx-webhook>
+        {% if bitrix.webhook_broken %}<p class="hint" style="color:var(--red)">Сохранённый вебхук не читается — вставьте его заново.</p>{% endif %}
+      </div>
+      <button type="button" class="btn-sm btn-ghost" data-bx-load>Загрузить сайты</button>
+      <div class="field-row" style="margin-top:12px">
+        <div class="field">
+          <label for="bx_site">Сайт</label>
+          <select id="bx_site" name="site_id" data-bx-site>
+            {% if bitrix.site_id %}<option value="{{ bitrix.site_id }}" selected>{{ bitrix.site_title or ('Сайт ' ~ bitrix.site_id) }}</option>{% else %}<option value="">— сначала загрузите сайты —</option>{% endif %}
+          </select>
+        </div>
+        <div class="field">
+          <label for="bx_template">Страница-шаблон</label>
+          <select id="bx_template" name="template_id" data-bx-template>
+            {% if bitrix.template_id %}<option value="{{ bitrix.template_id }}" selected>{{ bitrix.template_title or ('Страница ' ~ bitrix.template_id) }}</option>{% else %}<option value="">— выберите сайт —</option>{% endif %}
+          </select>
+        </div>
+      </div>
+      <input type="hidden" name="site_title" value="{{ bitrix.site_title }}" data-bx-site-title>
+      <input type="hidden" name="template_title" value="{{ bitrix.template_title }}" data-bx-template-title>
+      <label class="check-inline"><input type="checkbox" name="mark_published" value="1" {{ 'checked' if bitrix.mark_published }}> После публикации ставить статус «Опубликована»</label>
+      <div class="gen-status hidden" data-bx-status style="margin-top:12px"></div>
+      <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
+        <button type="submit">Сохранить</button>
+        {% if bitrix.webhook_mask %}<button type="submit" class="btn-ghost" name="remove" value="1" data-confirm="Удалить подключение к Битрикс24?">Отключить</button>{% endif %}
+      </div>
+    </form>
+  </div>
+  {% endif %}
     <div class="card">
       <h2 style="margin-bottom:14px">Оформление</h2>
       <form method="post" action="{{ url('/settings/theme') }}" class="theme-picker">

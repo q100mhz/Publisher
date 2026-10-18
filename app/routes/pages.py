@@ -5,9 +5,12 @@ from fastapi import APIRouter, Depends, Form, Request
 from sqlalchemy import func, or_, select
 from sqlalchemy.orm import Session, selectinload
 
-from ..auth import client_ip, is_locked, register_fail, require_user, reset_fails, verify_password
+from ..auth import (client_ip, create_user, is_locked, normalize_email, register_fail, register_signup, require_user,
+                    reset_fails, signup_allowed, start_session, verify_password)
+from ..config import REGISTRATION_ENABLED
 from ..db import get_db
 from ..models import News, NewsHistory, NewsStatus, ParserRun, Source, User, now
+from ..security import clean_text, escape_like
 from ..services import pii, scheduler
 from ..web import flash, redirect, render
 
@@ -30,17 +33,60 @@ def login(request: Request, login: str = Form(""), password: str = Form(""), db:
     if wait:
         return render(request, "login.html", error=f"Слишком много попыток. Попробуйте через {wait // 60 + 1} мин.",
                       login=login)
-    user = db.scalar(select(User).where(User.login == login.strip()))
+    email = normalize_email(login)
+    if not email:
+        return render(request, "login.html", error="Входите по e-mail, указанному при регистрации", login=login)
+    user = db.scalar(select(User).where(func.lower(User.login) == email))
     if not user or not verify_password(password, user.password_hash):
         register_fail(ip)
-        return render(request, "login.html", error="Неверный логин или пароль", login=login)
+        return render(request, "login.html", error="Неверный e-mail или пароль", login=login)
     if not user.is_active:
         return render(request, "login.html", error="Учётная запись отключена. Обратитесь к администратору.",
                       login=login)
     reset_fails(ip)
-    request.session.clear()
-    request.session["user_id"] = user.id
-    request.session["login"] = user.login
+    user.last_login_at = now()
+    db.commit()
+    start_session(request, user)
+    return redirect("/")
+
+
+@router.get("/register")
+def register_page(request: Request):
+    if not REGISTRATION_ENABLED:
+        return redirect("/login")
+    if request.session.get("user_id"):
+        return redirect("/")
+    return render(request, "register.html")
+
+
+@router.post("/register")
+def register(request: Request, email: str = Form(""), password: str = Form(""), repeat: str = Form(""),
+             website: str = Form(""), db: Session = Depends(get_db)):
+    if not REGISTRATION_ENABLED:
+        return redirect("/login")
+    raw_email, email = email.strip(), normalize_email(email)
+    ip = client_ip(request)
+    error = ""
+    if website:  # скрытое поле: его заполняют только боты
+        error = "Не удалось зарегистрироваться"
+    elif not signup_allowed(ip):
+        error = "Слишком много регистраций с вашего адреса. Попробуйте через час."
+    elif not email:
+        error = "Укажите корректный e-mail — регистрация только по e-mail"
+    elif len(password) < 8:
+        error = "Пароль — минимум 8 символов"
+    elif password != repeat:
+        error = "Пароли не совпадают"
+    elif db.scalar(select(User.id).where(func.lower(User.login) == email)):
+        error = "Пользователь с таким e-mail уже зарегистрирован. Войдите или обратитесь к администратору."
+    if error:
+        return render(request, "register.html", error=error, email=email or raw_email)
+    user = create_user(db, email, password, via="signup")
+    user.last_login_at = now()
+    db.commit()
+    register_signup(ip)
+    start_session(request, user)
+    flash(request, "Добро пожаловать! Начните с «Источников» и подключите нейросеть в «Настройках».")
     return redirect("/")
 
 
@@ -110,9 +156,10 @@ def index(
     if publish == "today":
         query = query.where(News.status != NewsStatus.PUBLISHED, News.planned_publish_date.is_not(None),
                             News.planned_publish_date <= today)
+    q = clean_text(q, 200)
     if q.strip():
-        like = f"%{q.strip()}%"
-        query = query.where(or_(News.title.ilike(like), News.original_text.ilike(like)))
+        like = f"%{escape_like(q.strip())}%"
+        query = query.where(or_(News.title.ilike(like, escape="\\"), News.original_text.ilike(like, escape="\\")))
 
     total = db.scalar(select(func.count()).select_from(query.subquery()))
     pages = max(1, (total + PAGE_SIZE - 1) // PAGE_SIZE)

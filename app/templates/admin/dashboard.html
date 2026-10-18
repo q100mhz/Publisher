@@ -1,0 +1,89 @@
+{% extends "admin/base.html" %}
+{% from "admin/_chart.html" import bar_chart %}
+{% block title %}Дашборд{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Дашборд</h1><span class="muted small">Данные на {{ today.strftime('%d.%m.%Y') }}</span></div>
+
+<div class="kpi-grid">
+  <a class="kpi" href="{{ aurl('/users') }}"><span class="lbl">Пользователей</span><span class="num">{{ users.total }}</span>
+    <span class="sub">+{{ users.new7 }} за 7 дней · +{{ users.new30 }} за 30</span></a>
+  <div class="kpi"><span class="lbl">Активны за 7 дней</span><span class="num">{{ users.active7 }}</span>
+    <span class="sub">заблокировано: {{ users.blocked }}</span></div>
+  <div class="kpi"><span class="lbl">Источников подключено</span><span class="num">{{ content.sources }}</span>
+    <span class="sub">у всех пользователей</span></div>
+  <div class="kpi"><span class="lbl">Статей спарсено</span><span class="num">{{ content.parsed }}</span>
+    <span class="sub">+{{ content.parsed7 }} за 7 дней</span></div>
+  <div class="kpi"><span class="lbl">Генераций сегодня</span><span class="num">{{ ai.today }}</span>
+    <span class="sub">{{ ai.total30 }} за 30 дней</span></div>
+  <div class="kpi {{ 'kpi-warn' if ai.error_share >= 10 }}"><span class="lbl">Ошибки генерации</span><span class="num">{{ ai.error_share }}%</span>
+    <span class="sub">{{ ai.errors30 }} из {{ ai.total30 }} за 30 дней</span></div>
+  <div class="kpi"><span class="lbl">Базовый DeepSeek</span><span class="num">{{ ai.base_month }}</span>
+    <span class="sub">генераций в этом месяце · разрешён {{ users.base_ai }} польз.</span></div>
+  <div class="kpi"><span class="lbl">Опубликовано</span><span class="num">{{ content.published }}</span>
+    <span class="sub">из них в Битрикс24: {{ content.bitrix }}</span></div>
+</div>
+
+<div class="chart-grid">
+  <div class="card">{{ bar_chart(charts.signups, "Регистрации по дням", "регистраций") }}</div>
+  <div class="card">{{ bar_chart(charts.generations, "Обращения к нейросетям по дням", "запросов") }}</div>
+</div>
+
+<div class="chart-grid">
+  <div class="card">
+    <h2 style="margin-bottom:12px">Нейросети за 30 дней</h2>
+    {% if ai.by_provider %}
+    <table class="mini-table wide">
+      <tr><th>Сервис</th><th>Ключ</th><th>Запросов</th></tr>
+      {% for provider, via_base, n in ai.by_provider %}
+      <tr><td>{{ provider }}</td><td>{{ 'базовый сервиса' if via_base else 'свой' }}</td><td><b>{{ n }}</b></td></tr>
+      {% endfor %}
+    </table>
+    <p class="small muted" style="margin-top:10px">По видам:
+      {% for kind, n in ai.by_kind %}{{ {'text': 'статьи', 'title': 'заголовки', 'image': 'картинки'}.get(kind, kind) }} — {{ n }}{{ ', ' if not loop.last }}{% endfor %}</p>
+    {% else %}<p class="muted">Обращений ещё не было</p>{% endif %}
+  </div>
+  <div class="card">
+    <h2 style="margin-bottom:12px">Самые активные (30 дней)</h2>
+    {% if top_users %}
+    <table class="mini-table wide">
+      {% for login, n in top_users %}<tr><td>{{ login }}</td><td><b>{{ n }}</b> генераций</td></tr>{% endfor %}
+    </table>
+    {% else %}<p class="muted">Пока никого</p>{% endif %}
+  </div>
+</div>
+
+<div class="card">
+  <h2 style="margin-bottom:14px">Здоровье системы</h2>
+  <div class="health-grid">
+    <div class="{{ 'bad' if health.disk_pct >= 85 }}"><span class="lbl">Свободно на диске</span><b>{{ health.disk_free|bytes }}</b>
+      <span class="small muted">занято {{ health.disk_pct }}% из {{ health.disk_total|bytes }}</span>
+      <div class="meter"><span style="width: {{ health.disk_pct }}%"></span></div></div>
+    <div><span class="lbl">База данных</span><b>{{ health.db_size|bytes }}</b></div>
+    <div><span class="lbl">Картинки</span><b>{{ health.media_size|bytes }}</b></div>
+    <div class="{{ 'bad' if not health.base_key }}"><span class="lbl">Базовый ключ DeepSeek</span>
+      <b>{{ 'задан' if health.base_key else 'не задан в .env' }}</b></div>
+    <div><span class="lbl">Парсится сейчас</span><b>{{ health.running }}</b></div>
+    <div class="{{ 'bad' if health.runs_failed7 }}"><span class="lbl">Запусков с ошибкой за 7 дней</span><b>{{ health.runs_failed7 }}</b></div>
+  </div>
+
+  {% if health.failing_sources %}
+  <h3 style="margin:20px 0 8px">Источники с ошибкой парсинга</h3>
+  <div class="table-wrap"><table class="mini-table wide">
+    <tr><th>Сайт</th><th>Пользователь</th><th>Когда</th><th>Ошибка</th></tr>
+    {% for url, message, run_at, login in health.failing_sources %}
+    <tr><td class="small">{{ url }}</td><td>{{ login }}</td><td class="nowrap small">{{ run_at|dt }}</td><td class="small muted">{{ message[:140] }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+
+  {% if health.ai_errors %}
+  <h3 style="margin:20px 0 8px">Последние ошибки нейросетей</h3>
+  <div class="table-wrap"><table class="mini-table wide">
+    <tr><th>Когда</th><th>Пользователь</th><th>Сервис</th><th>Ошибка</th></tr>
+    {% for created, provider, kind, error, login in health.ai_errors %}
+    <tr><td class="nowrap small">{{ created|dt }}</td><td>{{ login }}</td><td class="small">{{ provider }} · {{ kind }}</td><td class="small muted">{{ error[:160] }}</td></tr>
+    {% endfor %}
+  </table></div>
+  {% endif %}
+</div>
+{% endblock %}

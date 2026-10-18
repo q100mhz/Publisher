@@ -1,0 +1,17 @@
+{% extends "admin/base.html" %}
+{% block title %}Журнал действий{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Журнал действий</h1><span class="muted small">последние 300</span></div>
+<div class="card"><div class="table-wrap">
+  <table class="registry">
+    <thead><tr><th>Когда</th><th>Администратор</th><th>Пользователь</th><th>Действие</th></tr></thead>
+    <tbody>
+    {% for a, login in rows %}
+      <tr><td class="nowrap small">{{ a.created_at|dt }}</td><td>{{ a.admin_login }}</td>
+        <td>{% if a.user_id %}<a href="{{ aurl('/users/' ~ a.user_id) }}">{{ login }}</a>{% else %}<span class="muted">—</span>{% endif %}</td>
+        <td>{{ a.action }}</td></tr>
+    {% else %}<tr><td colspan="4" class="muted">Записей нет</td></tr>{% endfor %}
+    </tbody>
+  </table>
+</div></div>
+{% endblock %}

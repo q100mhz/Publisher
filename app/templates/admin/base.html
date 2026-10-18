@@ -1,0 +1,40 @@
+{% import "_icons.html" as ic %}<!doctype html>
+<html lang="ru" data-theme="auto">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="robots" content="noindex, nofollow">
+  <title>{% block title %}Админка{% endblock %} · Publisher Admin</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 48 48'%3E%3Ccircle cx='24' cy='24' r='20' fill='%232e2925'/%3E%3Cpath d='M18 34V14h8a6.5 6.5 0 010 13h-8' fill='none' stroke='%23f7c531' stroke-width='5' stroke-linecap='round' stroke-linejoin='round'/%3E%3C/svg%3E">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Oswald:wght@500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="{{ aurl('/static/css/app.css') }}?v=15">
+  <script src="{{ aurl('/static/js/app.js') }}?v=15" defer></script>
+</head>
+<body class="admin">
+{{ ic.clay_defs() }}
+{% block body %}
+<header class="topbar admin-bar">
+  <a class="brand" href="{{ aurl('/') }}">{{ ic.logo() }} Publisher <span class="admin-tag">админка</span></a>
+  <button class="menu-toggle btn-sm" type="button" data-menu-toggle aria-label="Меню">Меню</button>
+  <nav class="nav">
+    <a href="{{ aurl('/') }}" class="{{ 'active' if active == 'dashboard' }}">Дашборд</a>
+    <a href="{{ aurl('/users') }}" class="{{ 'active' if active == 'users' }}">Пользователи</a>
+    <a href="{{ aurl('/audit') }}" class="{{ 'active' if active == 'audit' }}">Журнал действий</a>
+    <a href="{{ aurl('/announcement') }}" class="{{ 'active' if active == 'announcement' }}">Объявление</a>
+  </nav>
+  <form class="logout" method="post" action="{{ aurl('/logout') }}">
+    {% if admin %}<span class="whoami">{{ admin.login }}</span>{% endif %}
+    <button class="btn-sm" type="submit">Выйти</button>
+  </form>
+</header>
+<main class="page">
+  {% block content %}{% endblock %}
+</main>
+{% endblock %}
+{% if flashes %}
+<div class="flashes" data-flashes>{% for f in flashes %}<div class="flash {{ f.kind }}">{{ f.text }}</div>{% endfor %}</div>
+{% endif %}
+</body>
+</html>

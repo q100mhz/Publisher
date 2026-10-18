@@ -2,7 +2,6 @@
 
 Пользователей на сайте завести нельзя — только из терминала сервера (python -m app.cli).
 """
-import re
 
 from fastapi import APIRouter, Depends, Form, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -11,6 +10,7 @@ from sqlalchemy.orm import Session
 
 from ..auth import hash_password, require_user, verify_password
 from ..crypto import encrypt
+from ..security import UnsafeURL, check_url, clean_text
 from ..db import get_db
 from ..models import Prompt, User, get_setting, set_setting
 from ..services import ai, generator
@@ -48,6 +48,7 @@ def prompts_page(request: Request, edit: int | None = None, kind: str = "text", 
 @router.post("/prompts")
 def save_prompt(request: Request, prompt_id: str = Form(""), name: str = Form(...), text: str = Form(...),
                 kind: str = Form("text"), user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    text, name = clean_text(text, 20_000), clean_text(name, 200)
     if not text.strip():
         flash(request, "Текст промпта не может быть пустым", "warn")
         return redirect("/prompts")
@@ -95,7 +96,8 @@ def delete_prompt(request: Request, prompt_id: int, user_id: int = Depends(requi
 def settings_page(request: Request, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     user = request.state.user
     try:
-        ai_status = f"Готово: {ai.user_config(db, user).label}"
+        cfg = ai.user_config(db, user)
+        ai_status = f"Готово: {cfg.label}" + (" — через базовый ключ сервиса" if cfg.via_base else "")
     except ai.AIError as e:
         ai_status = str(e)
     try:
@@ -106,7 +108,18 @@ def settings_page(request: Request, user_id: int = Depends(require_user), db: Se
     return render(request, "settings.html", active="settings", themes=THEMES, providers=ai.PROVIDERS,
                   ai_settings=ai.describe(db, user), ai_status=ai_status,
                   img_providers=ai.IMAGE_PROVIDERS, img_models=ai.IMAGE_MODEL_HINTS, img_sizes=ai.IMAGE_SIZES,
-                  img_settings=ai.describe_images(db, user), img_status=img_status)
+                  img_settings=ai.describe_images(db, user), img_status=img_status, bitrix=_bitrix_view(db, user))
+
+
+def _bitrix_view(db: Session, user) -> dict | None:
+    """Настройки Битрикс24 для страницы (адрес вебхука — только маской)."""
+    if not user.bitrix_allowed:
+        return None
+    from ..crypto import mask
+    from ..services import bitrix
+    cfg = bitrix.user_settings(db, user)
+    cfg["webhook_mask"] = mask(cfg.pop("webhook")) if cfg.get("webhook") else ""
+    return cfg
 
 
 @router.post("/settings/theme")
@@ -116,6 +129,17 @@ def save_theme(request: Request, theme: str = Form("auto"), user_id: int = Depen
     db.commit()
     flash(request, f"Тема: {THEMES.get(theme, THEMES['auto']).lower()}")
     return redirect("/settings")
+
+
+def _check_base(value: str) -> tuple[str, str]:
+    """Адрес API нейросети: пустой, либо публичный http(s)-адрес (не внутренняя сеть сервера)."""
+    value = clean_text(value, 500).strip()
+    if not value:
+        return "", ""
+    try:
+        return check_url(value), ""
+    except UnsafeURL as e:
+        return "", str(e)
 
 
 @router.post("/settings/ai")
@@ -128,10 +152,9 @@ def save_ai(request: Request, provider: str = Form(...), model: str = Form("", a
     previous = get_setting(db, user_id, "ai_provider", "deepseek")
     set_setting(db, user_id, "ai_provider", provider)
     set_setting(db, user_id, "ai_model", model.strip())
-    base_url = base_url.strip()
-    if base_url and not re.match(r"^https?://", base_url):
-        flash(request, "Адрес API должен начинаться с https://", "warn")
-        base_url = ""
+    base_url, problem = _check_base(base_url)
+    if problem:
+        flash(request, f"Адрес API не сохранён: {problem}", "warn")
     set_setting(db, user_id, "ai_base_url", base_url)
     try:
         temp = min(max(float(temperature.replace(",", ".")), 0.0), 2.0)
@@ -139,12 +162,14 @@ def save_ai(request: Request, provider: str = Form(...), model: str = Form("", a
         temp = 1.0
     set_setting(db, user_id, "ai_temperature", str(temp))
 
+    key_name = f"ai_api_key:{provider}"  # у каждого сервиса свой ключ
     if remove_key:
-        set_setting(db, user_id, "ai_api_key", "")
+        set_setting(db, user_id, key_name, "")
     elif api_key.strip():
-        set_setting(db, user_id, "ai_api_key", encrypt(api_key.strip()))
-    elif provider != previous and get_setting(db, user_id, "ai_api_key"):
-        flash(request, "Вы сменили нейросеть — не забудьте вставить ключ от нового сервиса", "info")
+        set_setting(db, user_id, key_name, encrypt(api_key.strip()))
+    elif provider != previous and not get_setting(db, user_id, key_name):
+        if not (provider == "deepseek" and ai.base_available(request.state.user)):
+            flash(request, "Вы выбрали другую нейросеть — вставьте ключ от неё", "info")
     db.commit()
     flash(request, "Настройки нейросети сохранены")
     return redirect("/settings#ai")
@@ -157,16 +182,17 @@ def save_images(request: Request, provider: str = Form(""), model: str = Form(""
     provider = provider if provider in ai.IMAGE_PROVIDERS else ""
     set_setting(db, user_id, "img_provider", provider)
     set_setting(db, user_id, "img_model", model.strip())
-    base_url = base_url.strip()
-    if base_url and not re.match(r"^https?://", base_url):
-        flash(request, "Адрес API для картинок должен начинаться с https://", "warn")
-        base_url = ""
+    base_url, problem = _check_base(base_url)
+    if problem:
+        flash(request, f"Адрес API для картинок не сохранён: {problem}", "warn")
     set_setting(db, user_id, "img_base_url", base_url)
     set_setting(db, user_id, "img_size", size if size in ai.IMAGE_SIZES else ai.IMAGE_SIZES[0])
-    if remove_key or not provider:
-        set_setting(db, user_id, "img_api_key", "")
-    elif api_key.strip():
-        set_setting(db, user_id, "img_api_key", encrypt(api_key.strip()))
+    if provider:
+        key_name = f"img_api_key:{provider}"
+        if remove_key:
+            set_setting(db, user_id, key_name, "")
+        elif api_key.strip():
+            set_setting(db, user_id, key_name, encrypt(api_key.strip()))
     db.commit()
     flash(request, "Настройки картинок сохранены")
     return redirect("/settings#images")
@@ -178,9 +204,11 @@ def test_ai(request: Request, user_id: int = Depends(require_user), db: Session 
     try:
         cfg = ai.user_config(db, request.state.user)
         answer = ai.complete(cfg, "Отвечай кратко.", "Ответь одним словом: работает?", quick_test=True)
+        ai.log_usage(user_id, "test", cfg.provider, cfg.model, cfg.via_base, True)
     except ai.AIError as e:
         return JSONResponse({"ok": False, "error": str(e)})
-    return {"ok": True, "message": f"{cfg.label}, модель {cfg.model} — ответ: "
+    source = " (базовый ключ сервиса)" if cfg.via_base else ""
+    return {"ok": True, "message": f"{cfg.label}{source}, модель {cfg.model} — ответ: "
                                    f"«{(answer or '').strip()[:60] or 'пустой, но соединение есть'}»"}
 
 

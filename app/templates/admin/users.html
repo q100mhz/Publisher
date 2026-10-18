@@ -1,0 +1,58 @@
+{% extends "admin/base.html" %}
+{% block title %}Пользователи{% endblock %}
+{% block content %}
+<div class="page-head"><h1>Пользователи <span class="muted small">({{ users|length }})</span></h1></div>
+<div class="card">
+  <form class="filters admin-filters" method="get" action="{{ aurl('/users') }}">
+    <div class="q"><label for="q">Поиск</label><input id="q" type="search" name="q" value="{{ q }}" placeholder="e-mail"></div>
+    <div><label for="status">Показать</label>
+      <select id="status" name="status" data-autosubmit>
+        {% for key, label in [('', 'Всех'), ('active', 'С доступом'), ('blocked', 'Заблокированных'), ('base_ai', 'С базовым DeepSeek'), ('bitrix', 'С Битрикс24')] %}
+        <option value="{{ key }}" {{ 'selected' if status == key }}>{{ label }}</option>{% endfor %}
+      </select></div>
+    <button type="submit">Найти</button>
+  </form>
+
+  <form method="post" action="{{ aurl('/users/bulk-access') }}" data-bulk-form>
+  <div class="table-wrap">
+  <table class="registry">
+    <thead><tr>
+      <th style="width:36px"><input type="checkbox" data-check-all aria-label="Выбрать всех"></th>
+      <th>Пользователь</th><th>Последний вход</th><th>Источников</th><th>Спарсено статей</th><th>Новостей</th>
+      <th>Генераций 30 дн.</th><th>Доступы</th>
+    </tr></thead>
+    <tbody>
+    {% for u in users %}
+      <tr class="{{ 'is-dup' if not u.is_active }}">
+        <td><input type="checkbox" name="ids" value="{{ u.id }}" aria-label="Выбрать"></td>
+        <td class="title"><a href="{{ aurl('/users/' ~ u.id) }}">{{ u.login }}</a>
+          <div class="sub">{{ {'signup': 'регистрация', 'cli': 'терминал', 'admin': 'админка'}.get(u.registered_via, u.registered_via) }} · {{ u.created_at|d }}
+            {% if not u.is_active %} · <span class="chip overdue">заблокирован</span>{% endif %}
+            {% if u.login is not email %} · <span class="chip today" title="Не e-mail: войти не сможет, замените в карточке">нет e-mail</span>{% endif %}</div></td>
+        <td class="nowrap small">{{ u.last_login_at|dt }}</td>
+        <td>{{ stats.sources.get(u.id, 0) }}</td>
+        <td>{{ stats.parsed.get(u.id, 0) }}</td>
+        <td>{{ stats.news.get(u.id, 0) }}</td>
+        <td>{{ stats.gen30.get(u.id, 0) }}</td>
+        <td class="nowrap">
+          {% if u.base_ai_allowed %}<span class="chip s-published" title="Лимит: {{ u.ai_monthly_limit if u.ai_monthly_limit is not none else 'нет' }}">DeepSeek</span>{% endif %}
+          {% if u.bitrix_allowed %}<span class="chip s-generated">Битрикс24</span>{% endif %}
+          {% if not u.base_ai_allowed and not u.bitrix_allowed %}<span class="muted small">—</span>{% endif %}
+        </td>
+      </tr>
+    {% else %}
+      <tr><td colspan="8" class="muted">Никого не нашлось</td></tr>
+    {% endfor %}
+    </tbody>
+  </table>
+  </div>
+  <div class="clay bulkbar hidden" data-bulkbar>
+    <b>Выбрано: <span data-bulk-count>0</span></b>
+    <button class="btn-sm btn-green" name="action" value="base_on">Разрешить базовый DeepSeek</button>
+    <button class="btn-sm btn-ghost" name="action" value="base_off">Запретить DeepSeek</button>
+    <button class="btn-sm btn-green" name="action" value="bitrix_on">Разрешить Битрикс24</button>
+    <button class="btn-sm btn-ghost" name="action" value="bitrix_off">Запретить Битрикс24</button>
+  </div>
+  </form>
+</div>
+{% endblock %}

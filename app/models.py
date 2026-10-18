@@ -37,10 +37,18 @@ class NewsStatus:
 class User(Base):
     __tablename__ = "users"
     id: Mapped[int] = mapped_column(primary_key=True)
-    login: Mapped[str] = mapped_column(String(100), unique=True)
+    login: Mapped[str] = mapped_column(String(100), unique=True)  # у зарегистрированных — e-mail
     password_hash: Mapped[str] = mapped_column(String(200))
     is_active: Mapped[bool] = mapped_column(Boolean, default=True)   # выключенный не может войти
     created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    registered_via: Mapped[str] = mapped_column(String(20), default="cli")  # cli / signup / admin
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    last_seen_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    session_version: Mapped[int] = mapped_column(Integer, default=1)  # +1 — все сессии пользователя завершаются
+    # Что разрешил администратор
+    base_ai_allowed: Mapped[bool] = mapped_column(Boolean, default=False)  # базовый ключ DeepSeek сервиса
+    ai_monthly_limit: Mapped[int | None] = mapped_column(Integer, nullable=True)  # генераций по базовому ключу в месяц
+    bitrix_allowed: Mapped[bool] = mapped_column(Boolean, default=False)  # публикация в Битрикс24
 
 
 class Source(Base):
@@ -142,6 +150,12 @@ class News(Base):
     gen_state: Mapped[str] = mapped_column(String(20), default="idle")
     gen_error: Mapped[str] = mapped_column(Text, default="")
     gen_started_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+    # Публикация в Битрикс24
+    bitrix_page_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    bitrix_url: Mapped[str | None] = mapped_column(String(1000), nullable=True)
+    bitrix_state: Mapped[str] = mapped_column(String(20), default="idle")  # idle / running / error
+    bitrix_error: Mapped[str] = mapped_column(Text, default="")
+    bitrix_published_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
     # Фоновая генерация картинки: idle / running / error
     img_state: Mapped[str] = mapped_column(String(20), default="idle")
     img_error: Mapped[str] = mapped_column(Text, default="")
@@ -229,7 +243,7 @@ class NewsHistory(Base):
 
 
 class Setting(Base):
-    """Старые общие настройки (до многопользовательского режима). Читаются только при миграции."""
+    """Общие настройки сервиса (например, объявление для всех пользователей)."""
     __tablename__ = "settings"
     key: Mapped[str] = mapped_column(String(100), primary_key=True)
     value: Mapped[str] = mapped_column(Text, default="")
@@ -261,3 +275,51 @@ def get_float_setting(db, user_id: int, key: str, default: float) -> float:
         return float(get_setting(db, user_id, key, str(default)))
     except ValueError:
         return default
+
+
+class Admin(Base):
+    """Учётные записи админки (отдельно от пользователей; создаются только из терминала)."""
+    __tablename__ = "admins"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    login: Mapped[str] = mapped_column(String(100), unique=True)
+    password_hash: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now)
+    last_login_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)
+
+
+class AdminAudit(Base):
+    """Журнал действий администратора."""
+    __tablename__ = "admin_audit"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    admin_login: Mapped[str] = mapped_column(String(100))
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
+    action: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+
+
+class AIUsage(Base):
+    """Учёт обращений к нейросетям: для дашборда админки и лимитов базового ключа."""
+    __tablename__ = "ai_usage"
+    id: Mapped[int] = mapped_column(primary_key=True)
+    user_id: Mapped[int] = mapped_column(ForeignKey("users.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(20))       # text / title / image / test
+    provider: Mapped[str] = mapped_column(String(30))
+    model: Mapped[str] = mapped_column(String(100), default="")
+    via_base: Mapped[bool] = mapped_column(Boolean, default=False)  # через базовый ключ сервиса
+    ok: Mapped[bool] = mapped_column(Boolean, default=True)
+    error: Mapped[str] = mapped_column(Text, default="")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=now, index=True)
+
+
+def get_global(db, key: str, default: str = "") -> str:
+    """Общие настройки сервиса (объявление для всех и т. п.)."""
+    row = db.get(Setting, key)
+    return row.value if row else default
+
+
+def set_global(db, key: str, value: str) -> None:
+    row = db.get(Setting, key)
+    if row:
+        row.value = value
+    else:
+        db.add(Setting(key=key, value=value))

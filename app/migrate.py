@@ -27,6 +27,18 @@ NEW_COLUMNS = [
     ("news", "meta_html", "TEXT NOT NULL DEFAULT ''"),
     ("news_versions", "title", "VARCHAR(1000)"),
     ("news_versions", "meta_html", "TEXT NOT NULL DEFAULT ''"),
+    ("users", "registered_via", "VARCHAR(20) NOT NULL DEFAULT 'cli'"),
+    ("users", "last_login_at", "TIMESTAMP"),
+    ("users", "last_seen_at", "TIMESTAMP"),
+    ("users", "session_version", "INTEGER NOT NULL DEFAULT 1"),
+    ("users", "base_ai_allowed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("users", "ai_monthly_limit", "INTEGER"),
+    ("users", "bitrix_allowed", "BOOLEAN NOT NULL DEFAULT FALSE"),
+    ("news", "bitrix_page_id", "INTEGER"),
+    ("news", "bitrix_url", "VARCHAR(1000)"),
+    ("news", "bitrix_state", "VARCHAR(20) NOT NULL DEFAULT 'idle'"),
+    ("news", "bitrix_error", "TEXT NOT NULL DEFAULT ''"),
+    ("news", "bitrix_published_at", "TIMESTAMP"),
 ]
 OWNED_TABLES = ["sources", "news", "prompts", "parser_runs"]
 # Старый общий ключ настройки → личный ключ
@@ -48,6 +60,22 @@ def run() -> None:
                 print(f"[migrate] {table}.{column} добавлена")
         for table in OWNED_TABLES:
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_user_id ON {table} (user_id)"))
+
+        # Ключи API теперь хранятся отдельно для каждой нейросети: ai_api_key → ai_api_key:<сервис>
+        if "user_settings" in tables:
+            for prefix, provider_key, default in (("ai_api_key", "ai_provider", "deepseek"),
+                                                  ("img_api_key", "img_provider", "")):
+                rows = conn.execute(text("SELECT user_id, value FROM user_settings WHERE key = :k"),
+                                    {"k": prefix}).all()
+                for user_id, value in rows:
+                    provider = conn.execute(text("SELECT value FROM user_settings WHERE user_id = :u AND key = :k"),
+                                            {"u": user_id, "k": provider_key}).scalar() or default
+                    if value and provider:
+                        conn.execute(text("INSERT INTO user_settings (user_id, key, value) SELECT :u, :k, :v "
+                                          "WHERE NOT EXISTS (SELECT 1 FROM user_settings WHERE user_id = :u AND key = :k)"),
+                                     {"u": user_id, "k": f"{prefix}:{provider}", "v": value})
+                    conn.execute(text("DELETE FROM user_settings WHERE user_id = :u AND key = :k"),
+                                 {"u": user_id, "k": prefix})
 
         owner = conn.execute(text("SELECT id FROM users ORDER BY id LIMIT 1")).scalar()
         if owner is None:

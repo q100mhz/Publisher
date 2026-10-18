@@ -324,4 +324,6 @@ def reset_stale_flags() -> None:
                    .values(gen_state="error", gen_error="Прервано перезапуском сервера"))
         db.execute(update(News).where(News.img_state == "running")
                    .values(img_state="error", img_error="Прервано перезапуском сервера"))
+        db.execute(update(News).where(News.bitrix_state == "running")
+                   .values(bitrix_state="error", bitrix_error="Прервано перезапуском сервера"))
 

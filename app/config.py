@@ -19,9 +19,20 @@ COOKIE_SECURE = _bool("COOKIE_SECURE", False)
 MEDIA_DIR = Path(os.getenv("MEDIA_DIR", "./data/media")).resolve()
 MEDIA_DIR.mkdir(parents=True, exist_ok=True)
 
-# DeepSeek: адрес и модель по умолчанию. Ключи у каждого пользователя свои — в «Настройках» сайта
+# Базовый ключ DeepSeek сервиса. Им пользуются только те, кому это разрешено в админке,
+# и только пока у пользователя нет своего ключа DeepSeek.
+DEEPSEEK_API_KEY = os.getenv("DEEPSEEK_API_KEY", "")
 DEEPSEEK_BASE_URL = os.getenv("DEEPSEEK_BASE_URL", "https://api.deepseek.com")
 DEEPSEEK_MODEL = os.getenv("DEEPSEEK_MODEL", "deepseek-chat")
+
+# Регистрация по e-mail на странице входа
+REGISTRATION_ENABLED = _bool("REGISTRATION_ENABLED", True)
+
+# Админка: открывается на своём адресе (publisher-admin.itb2bhost.ru), nginx отдаёт её из /admin/.
+# ADMIN_HOST — если задан, админка отвечает только на этом адресе.
+ADMIN_HOST = os.getenv("ADMIN_HOST", "").strip().lower()
+# Префикс ссылок внутри админки: "" — когда у неё свой домен, "/admin" — для локальной разработки
+ADMIN_PREFIX = "/" + os.getenv("ADMIN_PREFIX", "").strip("/") if os.getenv("ADMIN_PREFIX", "").strip("/") else ""
 
 # Парсер
 AUTO_PARSE_INTERVAL_HOURS = float(os.getenv("AUTO_PARSE_INTERVAL_HOURS", "4"))

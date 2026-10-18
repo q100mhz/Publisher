@@ -8,6 +8,7 @@ from pathlib import Path
 from PIL import Image, ImageOps
 
 from ..config import MEDIA_DIR
+from ..security import safe_filename
 
 THUMB_SIZE = (320, 320)
 MIN_SIDE = 150  # картинки меньше — иконки и пиксели, не сохраняем при парсинге
@@ -18,6 +19,7 @@ class ImageError(Exception):
 
 
 def save_image(data: bytes, original_name: str, *, min_side: int = 0) -> dict:
+    original_name = safe_filename(original_name, "image")
     try:
         img = Image.open(io.BytesIO(data))
         img.load()

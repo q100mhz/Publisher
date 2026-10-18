@@ -217,6 +217,24 @@
       </div>
     </div>
 
+    {% if bitrix_problem is not none %}
+    <div class="card" data-bx-card data-url="{{ url('/news/' ~ news.id ~ '/bitrix') }}" data-state-url="{{ url('/news/' ~ news.id ~ '/bitrix-state') }}">
+      <h3 style="margin-bottom:12px">Битрикс24</h3>
+      {% if news.bitrix_url %}<p class="small" style="margin-top:0">Страница: <a href="{{ news.bitrix_url }}" target="_blank" rel="noopener noreferrer">открыть ↗</a>
+        <br><span class="muted">{{ news.bitrix_published_at|dt }}</span></p>{% endif %}
+      {% if bitrix_problem %}
+        <div class="gen-status error small">{{ bitrix_problem }} <a href="{{ url('/settings') }}#bitrix">Настроить →</a></div>
+      {% else %}
+        <button type="button" class="btn-dark" style="width:100%" data-bx-publish {{ 'disabled' if news.bitrix_state == 'running' or not news.html_code }}>
+          {{ '↻ Обновить на сайте' if news.bitrix_page_id else '⇪ Опубликовать в Битрикс24' }}</button>
+        {% if not news.html_code %}<p class="hint">Сначала сгенерируйте статью.</p>{% endif %}
+      {% endif %}
+      <div class="gen-status running small {{ 'hidden' if news.bitrix_state != 'running' }}" data-bx-running style="margin-top:10px">
+        <span class="blob-loader"></span> Отправляю на портал…</div>
+      <div class="gen-status error small {{ 'hidden' if news.bitrix_state != 'error' }}" data-bx-error style="margin-top:10px">{{ news.bitrix_error }}</div>
+    </div>
+    {% endif %}
+
     <div class="card">
       <h3 style="margin-bottom:12px">Сведения</h3>
       <dl class="kv">

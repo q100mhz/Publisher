@@ -8,10 +8,10 @@ from fastapi.staticfiles import StaticFiles
 from starlette.middleware.sessions import SessionMiddleware
 
 from .auth import LoginRequired, ensure_users_ready
-from .config import BASE_PATH, COOKIE_SECURE, SECRET_KEY
-from . import migrate
+from .config import ADMIN_HOST, ADMIN_PREFIX, BASE_PATH, COOKIE_SECURE, SECRET_KEY
+from . import admin, migrate
 from .db import Base, engine
-from .routes import news, pages, settings, sources
+from .routes import bitrix, news, pages, settings, sources
 from .services import parser, scheduler
 
 
@@ -27,6 +27,46 @@ async def lifespan(app: FastAPI):
 
 
 app = FastAPI(lifespan=lifespan, docs_url=None, redoc_url=None, openapi_url=None)
+
+
+CSP = "; ".join([
+    "default-src 'self'",
+    "script-src 'self'",                       # никаких встроенных и чужих скриптов
+    "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
+    "font-src 'self' https://fonts.gstatic.com",
+    "img-src 'self' data: https:",             # картинки в предпросмотре статьи бывают внешними
+    "connect-src 'self'",
+    "frame-src 'self'",
+    "frame-ancestors 'none'",                  # сайт нельзя встроить в чужую страницу
+    "form-action 'self'",
+    "base-uri 'self'",
+    "object-src 'none'",
+])
+
+
+@app.middleware("http")
+async def security_headers(request: Request, call_next):
+    response = await call_next(request)
+    response.headers.setdefault("Content-Security-Policy", CSP)
+    response.headers.setdefault("X-Content-Type-Options", "nosniff")
+    response.headers.setdefault("X-Frame-Options", "DENY")
+    response.headers.setdefault("Referrer-Policy", "same-origin")
+    response.headers.setdefault("Permissions-Policy", "camera=(), microphone=(), geolocation=()")
+    if request.headers.get("x-forwarded-proto") == "https" or request.url.scheme == "https":
+        response.headers.setdefault("Strict-Transport-Security", "max-age=31536000")
+    if request.url.path.startswith(("/admin", BASE_PATH + "/news", BASE_PATH + "/settings")):
+        response.headers.setdefault("Cache-Control", "no-store")  # личные данные не кешируются
+    return response
+
+
+@app.middleware("http")
+async def admin_only_on_admin_host(request: Request, call_next):
+    """Админка отвечает только на своём адресе (если он задан в ADMIN_HOST)."""
+    if request.url.path.startswith("/admin") and ADMIN_HOST:
+        host = (request.headers.get("host") or "").split(":")[0].lower()
+        if host != ADMIN_HOST:
+            return PlainTextResponse("Not found", status_code=404)
+    return await call_next(request)
 
 
 @app.middleware("http")
@@ -47,14 +87,22 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(admin.AdminLoginRequired)
+async def admin_login_required(request: Request, exc: admin.AdminLoginRequired):
+    return RedirectResponse(ADMIN_PREFIX + "/login", status_code=303)
+
+
 @app.exception_handler(LoginRequired)
 async def login_required(request: Request, exc: LoginRequired):
     return RedirectResponse(BASE_PATH + "/login", status_code=303)
 
 
 app.mount(BASE_PATH + "/static", StaticFiles(directory=Path(__file__).parent / "static"), name="static")
-for module in (pages, news, sources, settings):
+for module in (pages, news, sources, settings, bitrix):
     app.include_router(module.router, prefix=BASE_PATH)
+# Админка: свой домен, nginx проксирует его целиком в /admin/
+app.mount("/admin/static", StaticFiles(directory=Path(__file__).parent / "static"), name="admin-static")
+app.include_router(admin.router)
 
 if BASE_PATH:
     @app.get(BASE_PATH, include_in_schema=False)

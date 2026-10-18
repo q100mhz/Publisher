@@ -1,0 +1,21 @@
+{% extends "admin/base.html" %}
+{% block title %}Вход{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <form class="card admin-login" method="post" action="{{ aurl('/login') }}">
+    <div class="brand-dark">{{ ic.logo() }} <h1>Админка</h1></div>
+    <p class="muted" style="margin:0 0 20px">Publisher · вход для администратора</p>
+    {% if error %}<div class="gen-status error">{{ error }}</div>{% endif %}
+    <div class="field">
+      <label for="login">Логин администратора</label>
+      <input id="login" name="login" type="text" value="{{ login or '' }}" autocomplete="username" required autofocus>
+    </div>
+    <div class="field">
+      <label for="password">Пароль</label>
+      <input id="password" name="password" type="password" autocomplete="current-password" required>
+    </div>
+    <button class="btn-lg btn-dark" type="submit" style="width:100%">Войти</button>
+    <p class="hint" style="text-align:center">Учётные записи администраторов создаются только из терминала сервера.</p>
+  </form>
+</div>
+{% endblock %}

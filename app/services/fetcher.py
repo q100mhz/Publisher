@@ -20,11 +20,12 @@ import re
 import threading
 import time
 from typing import Callable
-from urllib.parse import urlparse
+from urllib.parse import urljoin, urlparse
 
 import httpx
 
 from ..config import PARSER_DELAY_MAX, PARSER_DELAY_MIN, PARSER_USE_BROWSER
+from ..security import UnsafeURL, check_url, is_safe_url
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -62,11 +63,28 @@ class DomainThrottle:
 
 
 throttle = DomainThrottle()
-_client = httpx.Client(headers=HEADERS, follow_redirects=True, timeout=httpx.Timeout(30, connect=15))
+# Перенаправления проходим вручную: каждый новый адрес проверяется на «внутреннюю сеть»
+_client = httpx.Client(headers=HEADERS, follow_redirects=False, timeout=httpx.Timeout(30, connect=15))
+MAX_REDIRECTS = 5
 
 
 def _domain(url: str) -> str:
     return urlparse(url).netloc.lower().removeprefix("www.")
+
+
+def _get_checked(url: str) -> httpx.Response:
+    """GET с проверкой адреса и каждого перенаправления."""
+    for _ in range(MAX_REDIRECTS + 1):
+        try:
+            check_url(url)
+        except UnsafeURL as e:
+            raise FetchError(f"{url}: {e}") from e
+        resp = _client.get(url)
+        if resp.is_redirect and resp.headers.get("location"):
+            url = urljoin(str(resp.url), resp.headers["location"])
+            continue
+        return resp
+    raise FetchError(f"{url}: слишком много перенаправлений")
 
 
 def fetch(url: str, *, binary: bool = False) -> httpx.Response:
@@ -76,10 +94,13 @@ def fetch(url: str, *, binary: bool = False) -> httpx.Response:
         while True:
             throttle.wait(domain)
             try:
-                resp = _client.get(url)
+                resp = _get_checked(url)
             except httpx.HTTPError as e:
                 throttle.mark(domain)
                 raise FetchError(f"{url}: {e.__class__.__name__}: {e}") from e
+            except FetchError:
+                throttle.mark(domain)
+                raise
             throttle.mark(domain)
             if resp.status_code in (429, 503) and backoffs:
                 retry_after = resp.headers.get("retry-after", "")
@@ -125,6 +146,10 @@ def render_html(url: str, ready: Callable[[str], bool] | None = None, max_wait: 
                 try:
                     page = browser.new_page(user_agent=USER_AGENT, locale="ru-RU",
                                             viewport={"width": 1366, "height": 900})
+                    # Браузер не должен ходить во внутреннюю сеть ни за страницей, ни за её ресурсами
+                    page.route("**/*", lambda route: route.continue_() if is_safe_url(route.request.url)
+                               or route.request.url.startswith(("data:", "blob:")) else route.abort())
+                    check_url(url)
                     page.goto(url, wait_until="domcontentloaded", timeout=45000)
                     try:
                         page.wait_for_load_state("networkidle", timeout=5000)

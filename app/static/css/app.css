@@ -400,6 +400,9 @@ pre.log { background: #26221f; color: #f3e9dc; padding: 18px; border-radius: 18p
 .login-art svg { width: 100%; max-width: 340px; height: auto; }
 .login-form { padding: 44px 40px; }
 .login-form h1 { margin-bottom: 6px; }
+.hp { position: absolute; left: -9999px; width: 1px; height: 1px; overflow: hidden; }
+.announcement { padding: 10px 28px; font-weight: 700; text-align: center; background: var(--yellow); color: #3b2c00; }
+.announcement.warn { background: var(--red); color: #fff; }
 .login-form .err { background: var(--overdue-bg); color: var(--red-deep); padding: 10px 14px; border-radius: 14px; font-weight: 700; margin-bottom: 14px; }
 
 /* ---------- Настройки и пользователи ---------- */
@@ -407,6 +410,9 @@ pre.log { background: #26221f; color: #f3e9dc; padding: 18px; border-radius: 18p
 .settings-grid > div > .card + .card { margin-top: 24px; }
 /* Поле ключа: обычный текст, скрытый точками — менеджеры паролей не принимают форму за вход на сайт */
 .secret-input { -webkit-text-security: disc; text-security: disc; font-family: var(--mono); }
+.steps { padding-left: 18px; line-height: 1.6; }
+.steps li { margin-bottom: 6px; }
+.base-key-note { margin: 10px 0 0; padding: 10px 14px; border-radius: 14px; font-size: 13px; background: color-mix(in srgb, var(--surface-2) 82%, var(--green) 18%); }
 .check-inline { display: inline-flex; align-items: center; gap: 8px; text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--ink); margin-top: 8px; }
 .theme-picker { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
 .theme-option { display: flex; flex-direction: column; align-items: center; gap: 8px; padding: 12px; border-radius: 18px; cursor: pointer; text-transform: none; letter-spacing: 0; font-size: 14px; color: var(--ink); background: var(--surface-2); box-shadow: var(--clay-inset); margin: 0; }
@@ -421,8 +427,53 @@ pre.log { background: #26221f; color: #f3e9dc; padding: 18px; border-radius: 18p
 .inline-form { display: flex; gap: 8px; }
 .inline-form input { padding: 6px 10px; font-size: 13px; }
 
+/* ---------- Админка ---------- */
+.admin-bar { background: #2b2622; box-shadow: 0 8px 20px rgba(0,0,0,.25), inset 0 -4px 8px rgba(0,0,0,.2), inset 0 3px 5px rgba(255,255,255,.08); }
+.admin-bar .nav a.active { color: #2b2622; }
+.admin-tag { font-size: 11px; padding: 3px 8px; border-radius: 999px; background: var(--yellow); color: #3b2c00; letter-spacing: .06em; }
+.admin-login { width: 100%; max-width: 420px; }
+.brand-dark { display: flex; align-items: center; gap: 10px; margin-bottom: 6px; }
+.brand-dark svg { width: 40px; height: 40px; }
+.kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 18px; margin-bottom: 24px; }
+.kpi { display: flex; flex-direction: column; gap: 4px; padding: 18px; border-radius: var(--radius); background: var(--surface); box-shadow: var(--clay-shadow); color: var(--ink); }
+a.kpi:hover { text-decoration: none; transform: translateY(-2px); }
+.kpi .lbl { font-size: 12px; font-weight: 800; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); }
+.kpi .num { font-family: var(--font-head); font-size: 34px; line-height: 1.1; }
+.kpi .sub { font-size: 12px; color: var(--muted); }
+.kpi-warn .num { color: var(--red); }
+.chart-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 24px; margin-bottom: 24px; }
+.chart-grid .card + .card { margin-top: 0; }
+.chart { margin: 0; --chart-bar: #e06a1c; }
+:root[data-theme="dark"] .chart { --chart-bar: #d9732c; }
+@media (prefers-color-scheme: dark) { :root:not([data-theme="light"]) .chart { --chart-bar: #d9732c; } }
+.chart figcaption { margin-bottom: 8px; }
+.chart svg { width: 100%; height: auto; display: block; overflow: visible; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .baseline { stroke: var(--muted); stroke-width: 1; opacity: .6; }
+.chart .axis { fill: var(--muted); font-size: 11px; font-family: var(--font); }
+.chart .bar path { fill: var(--chart-bar); }
+.chart .bar .hit { fill: transparent; }
+.chart .bar:hover .hit { fill: var(--line); }
+.mini-table { border-collapse: collapse; font-size: 14px; }
+.mini-table.wide { width: 100%; }
+.mini-table th { text-align: left; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .04em; padding: 6px 8px; }
+.mini-table td { padding: 7px 8px; border-top: 1px solid var(--line); vertical-align: top; }
+.health-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; }
+.health-grid > div { display: flex; flex-direction: column; gap: 3px; padding: 14px 16px; border-radius: 18px; background: var(--surface-2); box-shadow: var(--clay-inset); }
+.health-grid > div.bad { background: var(--overdue-bg); }
+.health-grid .lbl { font-size: 12px; font-weight: 800; text-transform: uppercase; color: var(--muted); }
+.health-grid b { font-size: 18px; }
+.meter { height: 8px; border-radius: 99px; background: var(--line); overflow: hidden; margin-top: 4px; }
+.meter span { display: block; height: 100%; background: var(--orange); border-radius: 99px; }
+.admin-filters { grid-template-columns: 2fr 1fr auto; }
+.temp-password { border-left: 8px solid var(--yellow); margin-bottom: 24px; }
+.temp-value { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.temp-value code { font-size: 22px; padding: 8px 14px; border-radius: 12px; background: var(--surface-2); box-shadow: var(--clay-inset); }
+
 /* ---------- Адаптив ---------- */
 @media (max-width: 1180px) {
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .chart-grid { grid-template-columns: 1fr; }
   .tiles { grid-template-columns: repeat(3, 1fr); }
   .filters { grid-template-columns: 1fr 1fr 1fr; }
   .news-layout { grid-template-columns: 1fr; }
@@ -455,6 +506,8 @@ pre.log { background: #26221f; color: #f3e9dc; padding: 18px; border-radius: 18p
   .source .controls { justify-content: flex-start; }
   .prompts-layout { grid-template-columns: 1fr; }
   .settings-grid { grid-template-columns: 1fr; }
+  .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+  .chart-grid, .health-grid { grid-template-columns: 1fr; }
   .image-columns { grid-template-columns: 1fr; }
   .topbar .whoami { display: none; }
   .registry .col-hide { display: none; }

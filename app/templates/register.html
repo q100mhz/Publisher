@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Регистрация{% endblock %}
+{% block body %}
+<div class="login-wrap">
+  <div class="login-card clay">
+    <div class="login-art">{{ ic.login_art() }}</div>
+    <form class="login-form" method="post" action="{{ url('/register') }}">
+      <h1>Регистрация</h1>
+      <p class="muted" style="margin:0 0 20px">Свой кабинет: источники, реестр публикаций и генерация статей</p>
+      {% if error %}<div class="err">{{ error }}</div>{% endif %}
+      <div class="field">
+        <label for="email">E-mail</label>
+        <input id="email" name="email" type="email" value="{{ email or '' }}" autocomplete="email" required autofocus>
+      </div>
+      <div class="field">
+        <label for="password">Пароль</label>
+        <input id="password" name="password" type="password" autocomplete="new-password" minlength="8" required>
+      </div>
+      <div class="field">
+        <label for="repeat">Повторите пароль</label>
+        <input id="repeat" name="repeat" type="password" autocomplete="new-password" minlength="8" required>
+      </div>
+      <div class="hp" aria-hidden="true"><label>Сайт <input name="website" tabindex="-1" autocomplete="off"></label></div>
+      <button class="btn-lg" type="submit" style="width:100%;margin-top:6px">Создать кабинет</button>
+      <p class="muted small" style="text-align:center;margin:16px 0 0">Уже есть аккаунт? <a href="{{ url('/login') }}">Войти</a></p>
+      <p class="hint">Нейросеть для генерации подключается в «Настройках» своим ключом
+        или включается администратором сервиса.</p>
+    </form>
+  </div>
+</div>
+{% endblock %}

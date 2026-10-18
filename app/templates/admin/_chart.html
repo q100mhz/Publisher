@@ -1,0 +1,28 @@
+{% macro bar_chart(c, title, unit) %}
+<figure class="chart">
+  <figcaption><b>{{ title }}</b> <span class="muted small">· 30 дней, всего {{ c.total }}</span></figcaption>
+  <svg viewBox="0 0 {{ c.w }} {{ c.h }}" role="img" aria-label="{{ title }}: всего {{ c.total }} за 30 дней">
+    <line class="grid" x1="{{ c.left }}" x2="{{ c.w }}" y1="{{ c.top }}" y2="{{ c.top }}"/>
+    <text class="axis" x="{{ c.left - 6 }}" y="{{ c.top + 4 }}" text-anchor="end">{{ c.max }}</text>
+    {% if c.mid %}
+    <line class="grid" x1="{{ c.left }}" x2="{{ c.w }}" y1="{{ c.top + c.plot_h / 2 }}" y2="{{ c.top + c.plot_h / 2 }}"/>
+    <text class="axis" x="{{ c.left - 6 }}" y="{{ c.top + c.plot_h / 2 + 4 }}" text-anchor="end">{{ c.mid }}</text>
+    {% endif %}
+    <line class="baseline" x1="{{ c.left }}" x2="{{ c.w }}" y1="{{ c.base }}" y2="{{ c.base }}"/>
+    <text class="axis" x="{{ c.left - 6 }}" y="{{ c.base + 4 }}" text-anchor="end">0</text>
+    {% for b in c.bars %}
+    <g class="bar">
+      <title>{{ b.label }} {{ unit }}</title>
+      <rect class="hit" x="{{ b.hit_x }}" y="{{ c.top }}" width="{{ b.hit_w }}" height="{{ c.plot_h }}"/>
+      {% if b.path %}<path d="{{ b.path }}"/>{% endif %}
+      {% if b.tick %}<text class="axis" x="{{ b.x + b.w / 2 }}" y="{{ c.h - 5 }}" text-anchor="middle">{{ b.day.strftime('%d.%m') }}</text>{% endif %}
+    </g>
+    {% endfor %}
+  </svg>
+  <details class="fold small"><summary>Таблица</summary>
+    <table class="mini-table"><tr><th>День</th><th>{{ unit|capitalize }}</th></tr>
+      {% for b in c.bars|reverse %}{% if b.value %}<tr><td>{{ b.day.strftime('%d.%m.%Y') }}</td><td>{{ b.value }}</td></tr>{% endif %}{% endfor %}
+    </table>
+  </details>
+</figure>
+{% endmacro %}

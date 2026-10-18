@@ -9,18 +9,26 @@ from sqlalchemy.orm import Session
 from ..auth import require_user
 from ..db import get_db
 from ..models import News, ParserRun, SeenUrl, Source
+from ..security import UnsafeURL, check_url, clean_text
 from ..services import parser, scheduler
 from ..web import flash, fmt_dt, redirect, render
 
 router = APIRouter()
 
 
-def _clean_url(value: str) -> str | None:
-    value = value.strip()
+def _clean_url(value: str) -> tuple[str | None, str]:
+    """(адрес, причина отказа). Адреса во внутреннюю сеть сервера запрещены."""
+    value = clean_text(value, 1000).strip()
     if value and "://" not in value:
         value = "https://" + value
     p = urlparse(value)
-    return value if p.scheme in ("http", "https") and "." in p.netloc else None
+    if p.scheme not in ("http", "https") or "." not in p.netloc:
+        return None, "Укажите корректный адрес страницы со списком статей"
+    try:
+        check_url(value)
+    except UnsafeURL as e:
+        return None, str(e)
+    return value, ""
 
 
 def _own(db: Session, source_id: int, user_id: int) -> Source:
@@ -56,12 +64,12 @@ def sources_page(request: Request, user_id: int = Depends(require_user), db: Ses
 @router.post("/sources")
 def create_source(request: Request, name: str = Form(""), url: str = Form(...), keywords: str = Form(""),
                   user_id: int = Depends(require_user), db: Session = Depends(get_db)):
-    clean = _clean_url(url)
+    clean, problem = _clean_url(url)
     if not clean:
-        flash(request, "Укажите корректный адрес страницы со списком статей", "warn")
+        flash(request, problem, "warn")
         return redirect("/sources")
-    db.add(Source(user_id=user_id, name=name.strip() or urlparse(clean).netloc.removeprefix("www."), url=clean,
-                  keywords=keywords.strip()))
+    db.add(Source(user_id=user_id, name=clean_text(name, 200).strip() or urlparse(clean).netloc.removeprefix("www."),
+                  url=clean, keywords=clean_text(keywords, 2000).strip()))
     db.commit()
     flash(request, "Сайт добавлен в справочник")
     return redirect("/sources")
@@ -71,13 +79,13 @@ def create_source(request: Request, name: str = Form(""), url: str = Form(...), 
 def update_source(request: Request, source_id: int, name: str = Form(""), url: str = Form(...),
                   keywords: str = Form(""), user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     source = _own(db, source_id, user_id)
-    clean = _clean_url(url)
+    clean, problem = _clean_url(url)
     if not clean:
-        flash(request, "Некорректный адрес", "warn")
+        flash(request, problem, "warn")
         return redirect("/sources")
-    source.name = name.strip() or source.name
+    source.name = clean_text(name, 200).strip() or source.name
     source.url = clean
-    source.keywords = keywords.strip()
+    source.keywords = clean_text(keywords, 2000).strip()
     db.commit()
     flash(request, "Сохранено")
     return redirect("/sources")

@@ -1,5 +1,6 @@
 /* Publisher — клиентская логика (без фреймворков) */
 (() => {
+  window.BASE = document.body.dataset.base || "";  // префикс адресов (/publisher)
   const $ = (sel, root = document) => root.querySelector(sel);
   const $$ = (sel, root = document) => [...root.querySelectorAll(sel)];
 
@@ -413,6 +414,10 @@
         ? "Пусто — международный адрес Model Studio. Если в консоли Alibaba Cloud указан адрес рабочего пространства (…maas.aliyuncs.com/compatible-mode/v1), вставьте его."
         : "Для любого сервиса с OpenAI-совместимым API: российские модели через шлюзы, локальные модели и т. п.";
       $("[data-temperature-field]").classList.toggle("hidden", opt.dataset.temperature !== "1");
+      const keyMask = opt.dataset.keyMask;
+      $("[data-key-input]").placeholder = keyMask ? `сохранён: ${keyMask} — оставьте пустым, чтобы не менять` : "вставьте ключ";
+      $("[data-remove-key]").classList.toggle("hidden", !keyMask);
+      $("[data-base-note]")?.classList.toggle("hidden", providerSelect.value !== "deepseek");
       const link = $("[data-key-link]");
       link.innerHTML = opt.dataset.keyUrl
         ? `Где взять ключ: <a href="${opt.dataset.keyUrl}" target="_blank" rel="noopener noreferrer">${opt.dataset.keyUrl}</a>`
@@ -438,6 +443,9 @@
         ? "Пусто — международный адрес Model Studio. Можно вставить адрес своего рабочего пространства (…maas.aliyuncs.com/compatible-mode/v1)."
         : "Сервис должен принимать запросы в формате OpenAI Images (/images/generations).";
       $("[data-img-key]").classList.toggle("hidden", imgProvider.value === "");
+      const imgMask = opt.dataset.keyMask;
+      $("[data-img-key-input]").placeholder = imgMask ? `сохранён: ${imgMask} — оставьте пустым, чтобы не менять` : "вставьте ключ";
+      $("[data-img-remove-key]").classList.toggle("hidden", !imgMask);
     };
     imgProvider.addEventListener("change", syncImg);
     syncImg();
@@ -460,6 +468,75 @@
       aiTest.disabled = false;
     }
   });
+
+  // ---------- Битрикс24: настройки ----------
+  const bx = $("[data-bitrix]");
+  if (bx) {
+    const status = $("[data-bx-status]");
+    const show = (text, ok) => { status.className = `gen-status ${ok ? "running" : "error"}`; status.textContent = text; };
+    const siteSel = $("[data-bx-site]"), tplSel = $("[data-bx-template]");
+    const loadPages = async () => {
+      if (!siteSel.value) return;
+      $("[data-bx-site-title]").value = siteSel.selectedOptions[0].textContent;
+      tplSel.innerHTML = "<option value=''>загружаю…</option>";
+      try {
+        const res = await post(bx.dataset.pagesUrl, { site_id: siteSel.value, webhook: $("[data-bx-webhook]").value });
+        tplSel.innerHTML = res.pages.map((p) => `<option value="${p.id}">${escapeHtml(p.title)} (ID ${p.id})</option>`).join("")
+          || "<option value=''>на сайте нет страниц</option>";
+        $("[data-bx-template-title]").value = tplSel.selectedOptions[0]?.textContent || "";
+        show("Выберите страницу-шаблон и нажмите «Сохранить».", true);
+      } catch (err) { show(err.message, false); }
+    };
+    $("[data-bx-load]").addEventListener("click", async () => {
+      show("Подключаюсь к порталу…", true);
+      try {
+        const res = await post(bx.dataset.sitesUrl, { webhook: $("[data-bx-webhook]").value });
+        siteSel.innerHTML = res.sites.map((s) => `<option value="${s.id}">${escapeHtml(s.title)} (ID ${s.id})</option>`).join("");
+        show(`Подключение работает: сайтов — ${res.sites.length}.`, true);
+        await loadPages();
+      } catch (err) { show(err.message, false); }
+    });
+    siteSel.addEventListener("change", loadPages);
+    tplSel.addEventListener("change", () => { $("[data-bx-template-title]").value = tplSel.selectedOptions[0].textContent; });
+  }
+
+  // ---------- Битрикс24: публикация из карточки ----------
+  const bxCard = $("[data-bx-card]");
+  const bxBtn = $("[data-bx-publish]");
+  function pollBitrix() {
+    $("[data-bx-running]").classList.remove("hidden");
+    $("[data-bx-error]").classList.add("hidden");
+    if (bxBtn) bxBtn.disabled = true;
+    const timer = setInterval(async () => {
+      try {
+        const st = await getJSON(bxCard.dataset.stateUrl);
+        if (st.state === "running") return;
+        clearInterval(timer);
+        if (st.state === "error") {
+          $("[data-bx-running]").classList.add("hidden");
+          const box = $("[data-bx-error]");
+          box.textContent = st.error;
+          box.classList.remove("hidden");
+          if (bxBtn) bxBtn.disabled = false;
+        } else {
+          dirty = false;
+          location.reload();
+        }
+      } catch (_) { /* пробуем ещё */ }
+    }, 3000);
+  }
+  if (bxBtn) bxBtn.addEventListener("click", async () => {
+    if (dirty) { toast("Сначала сохраните изменения в карточке — на сайт уйдёт сохранённая версия", "warn"); return; }
+    bxBtn.disabled = true;
+    try {
+      await post(bxCard.dataset.url);
+      pollBitrix();
+    } catch (err) {
+      bxBtn.disabled = false;
+      toast(err.message, "warn");
+    }
+  });
+  if (bxCard && !$("[data-bx-running]").classList.contains("hidden")) pollBitrix();
 
   // ---------- Журнал: обновление идущего запуска ----------
   if ($("[data-autorefresh]")) setTimeout(() => location.reload(), 3000);

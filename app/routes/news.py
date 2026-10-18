@@ -9,12 +9,14 @@ from sqlalchemy.orm import Session, selectinload
 from ..auth import require_user
 from ..db import get_db
 from ..models import News, NewsHistory, NewsImage, NewsStatus, NewsVersion, Prompt, now
-from ..services import ai, generator
+from ..services import ai, bitrix, generator
 from ..services.images import ImageError, media_path, remove_files, save_image
+from ..security import clean_text, safe_filename
 from ..services.parser import executor
 from ..web import flash, redirect, render
 
 router = APIRouter()
+LIMITS = {"text": 300_000, "html": 500_000, "meta": 20_000}  # символов
 MAX_UPLOAD = 25 * 1024 * 1024  # 25 МБ на файл
 
 
@@ -67,7 +69,7 @@ async def _store_uploads(db: Session, news: News, files: list[UploadFile]) -> li
             errors.append(f"«{f.filename}» больше 25 МБ")
             continue
         try:
-            info = save_image(data, f.filename)
+            info = save_image(data, safe_filename(f.filename, "image"))
         except ImageError as e:
             errors.append(str(e))
             continue
@@ -92,9 +94,10 @@ async def create(
     user_id: int = Depends(require_user),
     db: Session = Depends(get_db),
 ):
+    original_text, html_code = clean_text(original_text, LIMITS["text"]), clean_text(html_code, LIMITS["html"])
     news = News(
         user_id=user_id,
-        title=title.strip()[:1000] or "Без заголовка",
+        title=clean_text(title, 1000).strip() or "Без заголовка",
         created_at=_parse_datetime(created_at) or now(),
         original_text=original_text,
         html_code=html_code,
@@ -125,6 +128,7 @@ def card(request: Request, news_id: int, user_id: int = Depends(require_user), d
         statuses=NewsStatus.LABELS, versions=news.versions[:20], history=news.history[:50],
         ai_error=_ai_error(db, request.state.user), image_prompts=image_prompts, title_prompts=title_prompts,
         privacy=generator.privacy_report(news),
+        bitrix_problem=bitrix.ready(db, request.state.user) if request.state.user.bitrix_allowed else None,
         img_error=_img_error(db, request.state.user),
     )
 
@@ -147,12 +151,12 @@ def save(
     news = _get(db, news_id, user_id)
     changes = []
     new_values = {
-        "title": (title.strip()[:1000] or news.title, "заголовок"),
+        "title": (clean_text(title, 1000).strip() or news.title, "заголовок"),
         "created_at": (_parse_datetime(created_at) or news.created_at, "дата создания"),
-        "original_text": (original_text, "текст оригинала"),
-        "html_code": (html_code, "HTML-код"),
-        "new_title": (new_title.strip()[:1000] or None, "изменённый заголовок"),
-        "meta_html": (meta_html.strip(), "META"),
+        "original_text": (clean_text(original_text, LIMITS["text"]), "текст оригинала"),
+        "html_code": (clean_text(html_code, LIMITS["html"]), "HTML-код"),
+        "new_title": (clean_text(new_title, 1000).strip() or None, "изменённый заголовок"),
+        "meta_html": (clean_text(meta_html, LIMITS["meta"]).strip(), "META"),
         "planned_publish_date": (_parse_date(planned_publish_date), "плановая дата публикации"),
         "published_at": (_parse_date(published_at), "фактическая дата публикации"),
     }

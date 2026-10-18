@@ -8,11 +8,10 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link href="https://fonts.googleapis.com/css2?family=Nunito:wght@400;600;700;800&family=Oswald:wght@500;600;700&family=JetBrains+Mono&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="{{ url('/static/css/app.css') }}?v=12">
-  <script>window.BASE = "{{ BASE_PATH }}";</script>
-  <script src="{{ url('/static/js/app.js') }}?v=12" defer></script>
+  <link rel="stylesheet" href="{{ url('/static/css/app.css') }}?v=15">
+  <script src="{{ url('/static/js/app.js') }}?v=15" defer></script>
 </head>
-<body class="{% block body_class %}{% endblock %}">
+<body class="{% block body_class %}{% endblock %}" data-base="{{ BASE_PATH }}">
 {{ ic.clay_defs() }}
 {% block body %}
 <header class="topbar">
@@ -30,6 +29,7 @@
     <button class="btn-sm" type="submit" title="Выйти">Выйти</button>
   </form>
 </header>
+{% if announcement %}<div class="announcement {{ announcement_kind }}">📣 {{ announcement }}</div>{% endif %}
 <main class="page">
   {% block content %}{% endblock %}
 </main>

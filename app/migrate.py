@@ -50,6 +50,19 @@ OLD_SETTINGS = {
 }
 
 
+def _add_setting(conn, user_id: int, key: str, value: str) -> None:
+    """Добавляет личную настройку, если её ещё нет.
+
+    Отдельные SELECT и INSERT ... VALUES вместо INSERT ... SELECT ... WHERE NOT EXISTS:
+    PostgreSQL не может вывести тип параметра, использованного в таком запросе дважды.
+    """
+    exists = conn.execute(text("SELECT 1 FROM user_settings WHERE user_id = :u AND key = :k"),
+                          {"u": user_id, "k": key}).scalar()
+    if not exists:
+        conn.execute(text("INSERT INTO user_settings (user_id, key, value) VALUES (:u, :k, :v)"),
+                     {"u": user_id, "k": key, "v": value})
+
+
 def run() -> None:
     insp = inspect(engine)
     tables = set(insp.get_table_names())
@@ -71,9 +84,7 @@ def run() -> None:
                     provider = conn.execute(text("SELECT value FROM user_settings WHERE user_id = :u AND key = :k"),
                                             {"u": user_id, "k": provider_key}).scalar() or default
                     if value and provider:
-                        conn.execute(text("INSERT INTO user_settings (user_id, key, value) SELECT :u, :k, :v "
-                                          "WHERE NOT EXISTS (SELECT 1 FROM user_settings WHERE user_id = :u AND key = :k)"),
-                                     {"u": user_id, "k": f"{prefix}:{provider}", "v": value})
+                        _add_setting(conn, user_id, f"{prefix}:{provider}", value)
                     conn.execute(text("DELETE FROM user_settings WHERE user_id = :u AND key = :k"),
                                  {"u": user_id, "k": prefix})
 
@@ -89,15 +100,9 @@ def run() -> None:
         if "settings" in tables:
             for old_key, new_key in OLD_SETTINGS.items():
                 value = conn.execute(text("SELECT value FROM settings WHERE key = :k"), {"k": old_key}).scalar()
-                exists = conn.execute(text("SELECT 1 FROM user_settings WHERE user_id = :u AND key = :k"),
-                                      {"u": owner, "k": new_key}).scalar()
-                if value is not None and not exists:
-                    conn.execute(text("INSERT INTO user_settings (user_id, key, value) VALUES (:u, :k, :v)"),
-                                 {"u": owner, "k": new_key, "v": value})
+                if value is not None:
+                    _add_setting(conn, owner, new_key, value)
                     if new_key == "ai_model":
-                        conn.execute(text(
-                            "INSERT INTO user_settings (user_id, key, value) SELECT :u, 'ai_provider', 'deepseek' "
-                            "WHERE NOT EXISTS (SELECT 1 FROM user_settings WHERE user_id = :u AND key = 'ai_provider')"),
-                            {"u": owner})
+                        _add_setting(conn, owner, "ai_provider", "deepseek")
             conn.execute(text("DELETE FROM settings WHERE key IN ('auto_enabled', 'auto_last_run', "
                               "'deepseek_model', 'deepseek_temperature')"))

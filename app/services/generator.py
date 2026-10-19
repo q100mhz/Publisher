@@ -268,7 +268,9 @@ def clean_html(answer: str) -> str:
     fenced = re.search(r"```(?:html)?\s*\n(.*?)```", answer, re.S | re.I)
     if fenced:
         answer = fenced.group(1).strip()
-    return answer
+    # Оставшиеся обрывки разметки markdown (```json, ```) в HTML не нужны
+    answer = re.sub(r"^\s*```[a-zA-Z]*\s*$", "", answer, flags=re.M)
+    return answer.replace("```", "").strip()
 
 
 def generate(news_id: int, prompt_id: int) -> None:

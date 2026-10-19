@@ -407,6 +407,13 @@
   });
   $$("[data-autosubmit-files]").forEach((input) => input.addEventListener("change", () => {
     if (!input.files.length) return;
+    const maxMb = Number(input.dataset.maxMb || 0);
+    const big = maxMb ? [...input.files].filter((f) => f.size > maxMb * 1024 * 1024) : [];
+    if (big.length) {
+      alert(`Картинка больше ${maxMb} МБ: ${big.map((f) => f.name).join(", ")}. Уменьшите её и загрузите снова.`);
+      input.value = "";
+      return;
+    }
     if (dirty && !confirm("В карточке есть несохранённые изменения — после загрузки картинок они пропадут. Продолжить?")) return;
     dirty = false;
     input.form.submit();

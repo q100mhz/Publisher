@@ -517,3 +517,10 @@ a.kpi:hover { text-decoration: none; transform: translateY(-2px); }
 /* Правка текста в предпросмотре */
 .edit-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
 .edit-bar .hint { margin: 0; }
+
+/* Своя картинка для статьи */
+.img-badge { position: absolute; top: 6px; left: 6px; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; background: var(--yellow); color: #3b2a12; pointer-events: none; }
+.img-badge.own { background: var(--orange); color: #fff; }
+.cover-mark { color: var(--orange); }
+.dropzone-own { padding: 14px; }
+.cover-mark { font-weight: 800; }

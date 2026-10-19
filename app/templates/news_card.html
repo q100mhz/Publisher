@@ -133,14 +133,16 @@
       </div>
     </form>
 
-{% macro gallery(images) %}
+{% macro gallery(images, cover=None) %}
       <div class="gallery">
         {% for img in images %}
         <div class="img">
           <a class="thumb" href="{{ url('/media/' ~ img.id ~ '/original') }}" download="{{ img.original_name }}" title="{{ img.original_name }} — {{ img.width }}×{{ img.height }}">
             <img src="{{ url('/media/' ~ img.id ~ '/thumb') }}" alt="{{ img.original_name }}" loading="lazy">
           </a>
+          {% if img.kind == 'own' %}<span class="img-badge own">своя</span>{% elif img.kind == 'generated' %}<span class="img-badge">ИИ</span>{% endif %}
           <div class="meta">{{ img.width }}×{{ img.height }}</div>
+          {% if cover and img.id == cover.id %}<div class="meta cover-mark" title="Эта картинка уйдёт в статью при публикации в Битрикс24">★ в статью</div>{% endif %}
           <form method="post" action="{{ url('/news/' ~ news.id ~ '/images/' ~ img.id ~ '/delete') }}">
             <button class="del btn-red" title="Удалить картинку" data-confirm="Удалить эту картинку?">×</button>
           </form>
@@ -156,19 +158,29 @@
       <div class="image-columns">
         <section class="image-col">
           <h3>Оригинал <span class="muted small">({{ news.original_images|length }})</span></h3>
-          {% if news.original_images %}{{ gallery(news.original_images) }}{% else %}<p class="muted small">Картинок из оригинала нет</p>{% endif %}
+          {% if news.original_images %}{{ gallery(news.original_images, news.cover_image) }}{% else %}<p class="muted small">Картинок из оригинала нет</p>{% endif %}
           <form method="post" action="{{ url('/news/' ~ news.id ~ '/images') }}" enctype="multipart/form-data" data-upload-form>
             <label class="dropzone" data-dropzone>
-              <input type="file" name="images" accept="image/*" multiple data-autosubmit-files>
+              <input type="file" name="images" accept="image/*" multiple data-autosubmit-files data-max-mb="{{ max_upload_mb }}">
               <span style="font-size:26px">＋</span>
               Перетащите картинки или нажмите, чтобы выбрать
+              <span class="small muted" style="font-weight:600">до {{ max_upload_mb }} МБ каждая</span>
             </label>
           </form>
         </section>
 
         <section class="image-col image-col-ai">
-          <h3>Сгенерировано ИИ <span class="muted small">({{ news.generated_images|length }})</span></h3>
-          {% if news.generated_images %}{{ gallery(news.generated_images) }}{% else %}<p class="muted small">Здесь появятся картинки, нарисованные нейросетью</p>{% endif %}
+          <h3>Для статьи: ИИ или своя <span class="muted small">({{ news.generated_images|length }})</span></h3>
+          {% if news.generated_images %}{{ gallery(news.generated_images, news.cover_image) }}{% else %}<p class="muted small">Здесь появятся картинки, нарисованные нейросетью, или ваша картинка</p>{% endif %}
+          <form method="post" action="{{ url('/news/' ~ news.id ~ '/images') }}" enctype="multipart/form-data" data-upload-form>
+            <input type="hidden" name="kind" value="own">
+            <label class="dropzone dropzone-own" data-dropzone>
+              <input type="file" name="images" accept="image/jpeg,image/png,image/webp,image/gif" data-autosubmit-files data-max-mb="{{ max_upload_mb }}">
+              <span style="font-size:22px">⤒</span>
+              Загрузить свою картинку без генерации
+              <span class="small muted" style="font-weight:600">JPG, PNG, WebP или GIF, до {{ max_upload_mb }} МБ. Она пойдёт в статью вместо картинки от ИИ</span>
+            </label>
+          </form>
           <div class="gen-bar img-gen-bar">
             <div class="field">
               <label for="img-prompt">Промпт для картинки</label>

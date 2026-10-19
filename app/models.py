@@ -173,11 +173,20 @@ class News(Base):
 
     @property
     def original_images(self) -> list["NewsImage"]:
-        return [i for i in self.images if i.kind != "generated"]
+        return [i for i in self.images if i.kind not in ("generated", "own")]
 
     @property
     def generated_images(self) -> list["NewsImage"]:
-        return [i for i in self.images if i.kind == "generated"]
+        """Картинки для статьи: нарисованные нейросетью и загруженные пользователем вместо них."""
+        return [i for i in self.images if i.kind in ("generated", "own")]
+
+    @property
+    def cover_image(self) -> "NewsImage | None":
+        """Картинка, которая уйдёт в статью: последняя своя, иначе первая от ИИ, иначе первая из оригинала."""
+        own = [i for i in self.images if i.kind == "own"]
+        if own:
+            return max(own, key=lambda i: i.id)
+        return (self.generated_images or self.original_images or [None])[0]
 
     @property
     def source_name(self) -> str:
@@ -204,7 +213,7 @@ class NewsImage(Base):
     __tablename__ = "news_images"
     id: Mapped[int] = mapped_column(primary_key=True)
     news_id: Mapped[int] = mapped_column(ForeignKey("news.id"), index=True)
-    kind: Mapped[str] = mapped_column(String(20), default="original")  # original — с сайта/загружена, generated — ИИ
+    kind: Mapped[str] = mapped_column(String(20), default="original")  # original — с сайта/загружена к оригиналу, generated — ИИ, own — своя вместо ИИ
     filename: Mapped[str] = mapped_column(String(300))        # оригинал
     thumb_filename: Mapped[str] = mapped_column(String(300))  # миниатюра
     original_name: Mapped[str] = mapped_column(String(300))

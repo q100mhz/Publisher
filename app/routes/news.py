@@ -17,7 +17,8 @@ from ..web import flash, redirect, render
 
 router = APIRouter()
 LIMITS = {"text": 300_000, "html": 500_000, "meta": 20_000}  # символов
-MAX_UPLOAD = 25 * 1024 * 1024  # 25 МБ на файл
+MAX_UPLOAD_MB = 10
+MAX_UPLOAD = MAX_UPLOAD_MB * 1024 * 1024  # на один файл
 
 
 def _ai_error(db: Session, user) -> str:
@@ -59,21 +60,21 @@ def _get(db: Session, news_id: int, user_id: int) -> News:
     return news
 
 
-async def _store_uploads(db: Session, news: News, files: list[UploadFile]) -> list[str]:
+async def _store_uploads(db: Session, news: News, files: list[UploadFile], kind: str = "original") -> list[str]:
     errors = []
     for f in files:
         if not f or not f.filename:
             continue
         data = await f.read(MAX_UPLOAD + 1)
         if len(data) > MAX_UPLOAD:
-            errors.append(f"«{f.filename}» больше 25 МБ")
+            errors.append(f"«{safe_filename(f.filename, 'image')}» больше {MAX_UPLOAD_MB} МБ — уменьшите картинку и загрузите снова")
             continue
         try:
             info = save_image(data, safe_filename(f.filename, "image"))
         except ImageError as e:
             errors.append(str(e))
             continue
-        db.add(NewsImage(news_id=news.id, **info))
+        db.add(NewsImage(news_id=news.id, kind=kind, **info))
     return errors
 
 
@@ -124,7 +125,7 @@ def card(request: Request, news_id: int, user_id: int = Depends(require_user), d
     title_prompts = [p for p in prompts if p.kind == "title"]
     prompts = [p for p in prompts if p.kind == "text"]
     return render(
-        request, "news_card.html", active="registry", news=news, prompts=prompts,
+        request, "news_card.html", active="registry", news=news, prompts=prompts, max_upload_mb=MAX_UPLOAD_MB,
         statuses=NewsStatus.LABELS, versions=news.versions[:20], history=news.history[:50],
         ai_error=_ai_error(db, request.state.user), image_prompts=image_prompts, title_prompts=title_prompts,
         privacy=generator.privacy_report(news),
@@ -259,10 +260,19 @@ def quick_update(news_id: int, status: str | None = Form(None), planned_publish_
 
 @router.post("/news/{news_id}/images")
 async def upload_images(request: Request, news_id: int, images: list[UploadFile] = File(default=[]),
-                        user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+                        kind: str = Form("original"), user_id: int = Depends(require_user),
+                        db: Session = Depends(get_db)):
     news = _get(db, news_id, user_id)
-    errors = await _store_uploads(db, news, images)
-    db.add(NewsHistory(news_id=news.id, action="Добавлены картинки"))
+    kind = "own" if kind == "own" else "original"
+    if kind == "own":
+        images = images[:1]  # своя картинка для статьи — одна за раз
+    errors = await _store_uploads(db, news, images, kind)
+    added = len([f for f in images if f and f.filename]) - len(errors)
+    if added:
+        db.add(NewsHistory(news_id=news.id, action="Загружена своя картинка для статьи" if kind == "own"
+                           else "Добавлены картинки"))
+        if kind == "own":
+            flash(request, "Картинка загружена — она пойдёт в статью вместо картинки от ИИ")
     db.commit()
     for err in errors:
         flash(request, err, "warn")

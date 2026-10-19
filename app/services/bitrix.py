@@ -484,7 +484,7 @@ def publish(news_id: int) -> None:
                     db.add(NewsHistory(news_id=news_id, action="Служебная часть ответа нейросети (Meta, анализ, "
                                                                "описание картинки) перенесена из текста статьи в META"))
             article, css, seo = prepared["article"], prepared["css"], prepared["seo"]
-            image = (news.generated_images or news.original_images or [None])[0]
+            image = news.cover_image
             page_id = news.bitrix_page_id
             user_id = user.id
             saved_raw = get_setting(db, user.id, f"bitrix_tpl:{template_id}", "")

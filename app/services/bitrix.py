@@ -141,9 +141,14 @@ CSS_START, CSS_END = "/* publisher:start — стили статьи, обнов
 
 
 def _merge_css(existing: str, css: str) -> str:
-    """Свой CSS страницы: стили шаблона сохраняются, стили статьи заменяются между метками."""
-    existing = re.sub(re.escape(CSS_START) + r".*?" + re.escape(CSS_END), "", existing or "", flags=re.S).strip()
-    block = f"{CSS_START}\n{css}\n{CSS_END}" if css else ""
+    """Поле «Свой CSS» страницы Битрикс24 выводит как есть, поэтому стили статьи обёрнуты в <style>:
+    без тега браузер показывает CSS обычным текстом. Стили шаблона сохраняются, стили статьи
+    заменяются между метками (в том числе старая запись без <style>)."""
+    ours = r"(?:<style[^>]*>\s*)?" + re.escape(CSS_START) + r".*?" + re.escape(CSS_END) + r"(?:\s*</style>)?"
+    existing = re.sub(ours, "", existing or "", flags=re.S).strip()
+    if existing and "<style" not in existing.lower() and generator.looks_like_css(existing):
+        existing = f"<style>\n{existing}\n</style>"  # CSS шаблона без тега тоже был бы виден текстом
+    block = f"<style>\n{CSS_START}\n{css}\n{CSS_END}\n</style>" if css else ""
     return "\n\n".join(p for p in (existing, block) if p)
 
 

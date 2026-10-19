@@ -23,13 +23,14 @@ from datetime import date
 from urllib.parse import unquote
 
 import httpx
-from bs4 import BeautifulSoup
+from bs4 import BeautifulSoup, Comment
 
 from ..config import MEDIA_DIR
 from ..crypto import decrypt
 from ..db import session_scope
 from ..models import News, NewsHistory, NewsStatus, User, get_setting, now, set_setting
 from ..security import UnsafeURL, check_url
+from . import generator
 
 MARKERS = {"article": "%%ARTICLE%%", "title": "%%TITLE%%", "image": "%%IMAGE%%"}
 WEBHOOK_RE = re.compile(r"^https://[A-Za-z0-9.-]+/rest/\d+/[A-Za-z0-9]+/?$")
@@ -123,12 +124,53 @@ def slugify(text: str) -> str:
     return text[:80].rstrip("-") or f"article-{int(time.time())}"
 
 
-def _seo(meta_html: str) -> tuple[str, str]:
+def _seo(meta_html: str) -> dict:
+    """SEO-данные и служебный комментарий из META-раздела новости."""
     soup = BeautifulSoup(meta_html or "", "html.parser")
     title = soup.find("title")
-    desc = soup.find("meta", attrs={"name": "description"})
-    return (title.get_text(" ", strip=True) if title else "",
-            (desc.get("content") or "").strip() if desc else "")
+    seo = {"title": title.get_text(" ", strip=True) if title else ""}
+    for name in ("description", "keywords"):
+        tag = soup.find("meta", attrs={"name": name})
+        seo[name] = (tag.get("content") or "").strip() if tag else ""
+    notes = [c for c in soup.find_all(string=lambda t: isinstance(t, Comment)) if "Служебная часть" in c]
+    seo["comment"] = f"<!--{notes[0]}-->" if notes else ""
+    return seo
+
+
+CSS_START, CSS_END = "/* publisher:start — стили статьи, обновляются сервисом */", "/* publisher:end */"
+
+
+def _split_styles(article: str) -> tuple[str, str]:
+    """Вынимает <style> из статьи: Битрикс24 убирает этот тег из HTML-блока, а текст стилей оставляет
+    на странице. Стили уходят в собственный CSS страницы, где они работают и не видны."""
+    soup = BeautifulSoup(article, "html.parser")
+    css = []
+    for tag in soup.find_all("style"):
+        css.append(tag.get_text())
+        tag.decompose()
+    return str(soup).strip(), "\n".join(c.strip() for c in css if c.strip()).replace("</", "<\\/")
+
+
+def _merge_css(existing: str, css: str) -> str:
+    """Свой CSS страницы: стили шаблона сохраняются, стили статьи заменяются между метками."""
+    existing = re.sub(re.escape(CSS_START) + r".*?" + re.escape(CSS_END), "", existing or "", flags=re.S).strip()
+    block = f"{CSS_START}\n{css}\n{CSS_END}" if css else ""
+    return "\n\n".join(p for p in (existing, block) if p)
+
+
+def prepare_article(html_code: str, meta_html: str) -> dict:
+    """Готовит статью к публикации: отделяет служебную часть ответа нейросети (Meta Title, анализ,
+    ключи, описание картинки) и стили. Возвращает статью, CSS, SEO и очищенные поля новости,
+    если в них что-то поменялось."""
+    article, service = generator.split_service(html_code or "")
+    meta = meta_html or ""
+    if service:
+        extra = generator.service_meta(service, meta)
+        meta = "\n".join(p for p in (meta, extra) if p)
+    seo = _seo(meta)
+    article, css = _split_styles(article)
+    cleaned = (generator.split_service(html_code or "")[0], meta) if service else None
+    return {"article": article, "css": css, "seo": seo, "cleaned": cleaned}
 
 
 def _fill(content: str, parts: dict[str, str]) -> tuple[str, bool]:
@@ -435,8 +477,13 @@ def publish(news_id: int) -> None:
             webhook = cfg["webhook"]
             site_id, template_id = int(cfg["site_id"]), int(cfg["template_id"])
             title = (news.new_title or news.title).strip()
-            article = news.html_code
-            meta_title, meta_desc = _seo(news.meta_html)
+            prepared = prepare_article(news.html_code, news.meta_html)
+            if prepared["cleaned"]:
+                # Служебную часть из текста статьи переносим в META, чтобы в карточке было то же, что на сайте
+                news.html_code, news.meta_html = prepared["cleaned"]
+                db.add(NewsHistory(news_id=news_id, action="Служебная часть ответа нейросети (Meta, анализ, "
+                                                           "описание картинки) перенесена из текста статьи в META"))
+            article, css, seo = prepared["article"], prepared["css"], prepared["seo"]
             image = (news.generated_images or news.original_images or [None])[0]
             page_id = news.bitrix_page_id
             user_id = user.id
@@ -477,7 +524,7 @@ def publish(news_id: int) -> None:
         if MARKERS["image"] in code and image:
             src = _upload_image(webhook, info["id"], image)
             image_html = f'<img src="{src}" alt="{html_lib.escape(title)}">' if src else ""
-        filled = _fill_code(code, article, title, image_html)
+        filled = _fill_code(code, article + ("\n" + seo["comment"] if seo["comment"] else ""), title, image_html)
 
         # %%TITLE%% и %%IMAGE%% в обычных текстовых блоках (если они там есть) — их видно в содержимом блока
         for other in infos:
@@ -500,10 +547,20 @@ def publish(news_id: int) -> None:
         fields = {"TITLE": title[:255]}
         if first_time:
             fields["CODE"] = slugify(title)
-        extra = {k: v for k, v in {"METAMAIN_TITLE": meta_title or title, "METAMAIN_DESCRIPTION": meta_desc,
-                                    "METAOG_TITLE": meta_title or title, "METAOG_DESCRIPTION": meta_desc}.items() if v}
-        if extra:
-            fields["ADDITIONAL_FIELDS"] = extra
+        extra = {k: v for k, v in {"METAMAIN_TITLE": seo["title"] or title, "METAMAIN_DESCRIPTION": seo["description"],
+                                    "METAMAIN_KEYWORDS": seo["keywords"], "METAOG_TITLE": seo["title"] or title,
+                                    "METAOG_DESCRIPTION": seo["description"]}.items() if v}
+        extra["METAMAIN_USE"] = "Y"
+        current_css = ""
+        try:
+            current = call(webhook, "landing.landing.getadditionalfields", {"lid": page_id}) or {}
+            current_css = current.get("CSSBLOCK_CODE") or "" if isinstance(current, dict) else ""
+        except BitrixError:
+            pass
+        if css or CSS_START in current_css:
+            extra["CSSBLOCK_USE"] = "Y"
+            extra["CSSBLOCK_CODE"] = _merge_css(current_css, css)
+        fields["ADDITIONAL_FIELDS"] = extra
         call(webhook, "landing.landing.update", {"lid": page_id, "fields": fields})
 
         # Записываем код HTML-блока, публикуем и проверяем, что меток на сайте не осталось

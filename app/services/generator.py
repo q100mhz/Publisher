@@ -1,15 +1,19 @@
 """Генерация переработанной статьи нейросетью, выбранной пользователем в настройках."""
 from __future__ import annotations
 
+import html as html_lib
 import re
 import traceback
+import warnings
 
-from bs4 import BeautifulSoup, Doctype
+from bs4 import BeautifulSoup, Doctype, MarkupResemblesLocatorWarning
 
 from ..db import session_scope
 from ..models import News, NewsHistory, NewsImage, NewsStatus, NewsVersion, Prompt, User, now
 from . import ai, pii
 from .images import ImageError, save_image
+
+warnings.filterwarnings("ignore", category=MarkupResemblesLocatorWarning)
 
 SYSTEM_MESSAGE = (
     "Ты — редактор и SEO-копирайтер. Отвечай только готовым HTML-кодом статьи, "
@@ -200,6 +204,78 @@ def strip_dangerous(soup: BeautifulSoup) -> None:
                 del tag.attrs[attr]
 
 
+# Начало служебной части, которую нейросеть дописывает после статьи по промпту пользователя:
+# «**Meta Title:** …», «### 3. Анализ целевой аудитории», JSON с описанием картинки и т. п.
+SERVICE_START = re.compile(
+    r"\*\*\s*(?:Meta|Мета)[\s-]*(?:Title|Description|заголовок|описание)"
+    r"|(?:^|\n|>)[ \t]*(?:Meta|Мета)[\s-]*(?:Title|Description)\s*[:：]"
+    r"|(?:^|\n|>)[ \t]*#{1,6}[ \t]*(?:\d+[.)][ \t]|SEO|Meta|Мета|Анализ|Описание картинки|LSI|Ключев)"
+    r"|\*\*\s*(?:Рекомендуемые\s+)?(?:LSI|Ключевые)"
+    r"|\{\s*\"image_description\"",
+    re.I)
+_LABEL_END = r"\s*\**\s*[:：]\s*\**\s*(.+?)\s*(?=\*\*|\n|#{2,}|$)"
+SERVICE_FIELDS = {
+    "title": re.compile(r"(?:Meta|Мета)[\s-]*(?:Title|заголовок)" + _LABEL_END, re.I),
+    "description": re.compile(r"(?:Meta|Мета)[\s-]*(?:Description|описание)" + _LABEL_END, re.I),
+    "keywords": re.compile(r"(?:LSI[^:：*\n]*|Ключевые слова[^:：*\n]*|Keywords)" + _LABEL_END, re.I),
+}
+MIN_ARTICLE_CHARS = 300  # раньше этого служебную часть не ищем — иначе можно отрезать всю статью
+
+
+def _visible_len(html: str) -> int:
+    return len(BeautifulSoup(html, "html.parser").get_text(" ", strip=True))
+
+
+def split_service(html: str) -> tuple[str, dict]:
+    """Отделяет от статьи служебную часть, которую нейросеть дописала текстом (часто markdown):
+    Meta Title / Description, ключевые слова, анализ аудитории, описание картинки.
+
+    Возвращает (статья, {"title", "description", "keywords", "notes"}) — пустой словарь, если служебной
+    части нет. На сайте служебная часть не показывается: мета-данные уходят в SEO-поля страницы,
+    остальное — в HTML-комментарий.
+    """
+    html = html or ""
+    first_tag = html.find("<")
+    if 0 < first_tag and _visible_len(html[:first_tag]) < MIN_ARTICLE_CHARS:
+        html = html[first_tag:]  # «### 1. Статья», «Вот статья:» перед HTML
+    for m in SERVICE_START.finditer(html):
+        start = m.start() + (1 if m.group(0)[:1] in "\n>" else 0)
+        if _visible_len(html[:start]) < MIN_ARTICLE_CHARS:
+            continue
+        head, tail = html[:start], html[start:]
+        notes = BeautifulSoup(tail, "html.parser").get_text("\n")
+        notes = re.sub(r"\n\s*\n+", "\n", notes).strip()
+        service = {name: (rx.search(notes).group(1).strip(" *«»\"") if rx.search(notes) else "")
+                   for name, rx in SERVICE_FIELDS.items()}
+        service["notes"] = notes
+        # html.parser сам закроет теги, оборванные на месте разреза
+        return str(BeautifulSoup(head, "html.parser")).strip(), service
+    return html, {}
+
+
+def service_comment(notes: str) -> str:
+    """Служебный текст как HTML-комментарий: в документе есть, на странице не виден."""
+    if not notes.strip():
+        return ""
+    return "<!-- Служебная часть ответа нейросети (на сайте не показывается):\n" \
+           + notes.replace("--", "—").strip() + "\n-->"
+
+
+def service_meta(service: dict, existing_meta: str) -> str:
+    """Теги для META-раздела из служебной части (только те, которых там ещё нет)."""
+    soup = BeautifulSoup(existing_meta or "", "html.parser")
+    parts = []
+    if service.get("title") and not soup.find("title"):
+        parts.append(f"<title>{html_lib.escape(service['title'])}</title>")
+    for name in ("description", "keywords"):
+        if service.get(name) and not soup.find("meta", attrs={"name": name}):
+            parts.append(f'<meta name="{name}" content="{html_lib.escape(service[name], quote=True)}">')
+    comment = service_comment(service.get("notes", ""))
+    if comment and comment not in (existing_meta or ""):
+        parts.append(comment)
+    return "\n".join(parts)
+
+
 def split_meta(html: str) -> tuple[str, str, str]:
     """Делит ответ нейросети на META-раздел и текст статьи.
 
@@ -207,6 +283,7 @@ def split_meta(html: str) -> tuple[str, str, str]:
     и разметка schema.org (JSON-LD); обёртки <html>/<head>/<body> убираются.
     Заголовок — текст <h1>, а если его нет — текст <title>.
     """
+    html, service = split_service(html)
     soup = BeautifulSoup(html, "html.parser")
     strip_dangerous(soup)
     title_tag = soup.find("title")
@@ -230,8 +307,10 @@ def split_meta(html: str) -> tuple[str, str, str]:
         body = str(soup)
     body = re.sub(r"\n{3,}", "\n\n", body).strip()
     h1 = BeautifulSoup(body, "html.parser").find("h1")
-    heading = h1.get_text(" ", strip=True) if h1 else page_title
-    return "\n".join(meta_parts), body, heading
+    heading = h1.get_text(" ", strip=True) if h1 else (page_title or service.get("title", ""))
+    meta = "\n".join(meta_parts)
+    extra = service_meta(service, meta)
+    return "\n".join(p for p in (meta, extra) if p), body, heading
 
 
 def clean_title(answer: str) -> str:

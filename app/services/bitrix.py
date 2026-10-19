@@ -226,16 +226,18 @@ def _block_info(webhook: str, lid: int, block: dict) -> dict:
     content = (call(webhook, "landing.block.getcontent", {"lid": lid, "block": block_id, "editMode": 1,
                                                            "params": {"wrapper_show": False}}) or {}).get("content", "")
     fields = list(dict.fromkeys(_html_fields(manifest)))
-    values = {}
+    values, raw = {}, {}
     soup = BeautifulSoup(content, "html.parser")
     for selector, attribute in fields:
         try:
             elements = soup.select(selector)
         except Exception:  # нестандартный селектор
             elements = []
-        values[(selector, attribute)] = "\n".join(_decoded(str(el.get(attribute, ""))) for el in elements)
+        attr_values = [str(el.get(attribute, "")) for el in elements]
+        values[(selector, attribute)] = "\n".join(_decoded(v) for v in attr_values)
+        raw[(selector, attribute)] = html_lib.unescape(attr_values[0]) if attr_values else ""
     return {"id": block_id, "code": block.get("code") or block.get("CODE") or "", "content": content,
-            "fields": fields, "values": values, "manifest": _manifest_excerpt(manifest)}
+            "fields": fields, "values": values, "raw": raw, "manifest": _manifest_excerpt(manifest)}
 
 
 def _find_article_target(webhook: str, page_id: int, template_id: int, infos: list[dict]):
@@ -256,6 +258,67 @@ def _find_article_target(webhook: str, page_id: int, template_id: int, infos: li
     if len(html_blocks) == 1:
         return html_blocks[0], *html_blocks[0]["fields"][0]
     return None
+
+
+def _template_code(webhook: str, template_id: int, index: int, selector: str, attribute: str) -> str | None:
+    """Исходный код HTML-блока из страницы-шаблона (с метками) — его заполняем при каждой публикации,
+    поэтому повторное обновление тоже работает."""
+    try:
+        template_blocks = _blocks(webhook, template_id)
+        if index < len(template_blocks):
+            raw = _block_info(webhook, template_id, template_blocks[index])["raw"].get((selector, attribute), "")
+            if any(m in raw for m in MARKERS.values()):
+                return raw
+        published = _blocks(webhook, template_id, edit=False, content=True)
+    except BitrixError:
+        return None
+    candidates = ([published[index]] if index < len(published) else []) + published
+    for block in candidates:
+        content = block.get("content") or ""
+        if MARKERS["article"] not in content:
+            continue
+        soup = BeautifulSoup(content, "html.parser")
+        try:
+            element = soup.select_one(selector)
+        except Exception:
+            element = None
+        inner = element.decode_contents() if element is not None and MARKERS["article"] in element.decode_contents() else ""
+        if not inner:
+            # Берём самый глубокий элемент, в котором ещё есть метка статьи
+            nodes = [el for el in soup.find_all(True) if MARKERS["article"] in el.decode_contents()]
+            inner = nodes[-1].decode_contents() if nodes else content
+        return inner.strip()
+    return None
+
+
+def _fill_code(code: str, article: str, title: str, image_html: str) -> str:
+    return (code.replace(MARKERS["article"], f'<div class="publisher-article">{article}</div>')
+                .replace(MARKERS["title"], html_lib.escape(title))
+                .replace(MARKERS["image"], image_html))
+
+
+def _markers_left(webhook: str, page_id: int) -> bool:
+    """Остались ли метки %%…%% на опубликованной странице."""
+    try:
+        published = _blocks(webhook, page_id, edit=False, content=True)
+    except BitrixError:
+        return False  # проверить не удалось — не считаем это ошибкой публикации
+    return any(m in (b.get("content") or "") for b in published for m in MARKERS.values())
+
+
+def _write_by_content(webhook: str, page_id: int, info: dict, selector: str, attribute: str, code: str) -> None:
+    """Запасной способ: код записывается и в атрибут элемента, и внутрь него — через замену содержимого блока."""
+    soup = BeautifulSoup(info["content"], "html.parser")
+    try:
+        element = soup.select_one(selector)
+    except Exception:
+        element = None
+    if element is None:
+        raise BitrixError(f"В блоке не найден элемент {selector} для записи кода")
+    element[attribute] = code
+    element.clear()
+    element.append(BeautifulSoup(code, "html.parser"))
+    call(webhook, "landing.block.updatecontent", {"lid": page_id, "block": info["id"], "content": str(soup)})
 
 
 def describe_blocks(infos: list[dict]) -> str:
@@ -358,12 +421,21 @@ def publish(news_id: int) -> None:
                               "Блоки страницы: "
                               + describe_blocks(infos))
         info, selector, attribute = target
-        call(webhook, "landing.block.updateattrs", {"lid": page_id, "block": info["id"], "data": {
-            selector: {attribute: f'<div class="publisher-article">{article}</div>'}}})
+        index = [i["id"] for i in infos].index(info["id"])
+        code = _template_code(webhook, template_id, index, selector, attribute) or MARKERS["article"]
+        image_html = ""
+        if MARKERS["image"] in code and image:
+            src = _upload_image(webhook, info["id"], image)
+            image_html = f'<img src="{src}" alt="{html_lib.escape(title)}">' if src else ""
+        filled = _fill_code(code, article, title, image_html)
+        call(webhook, "landing.block.updateattrs", {"lid": page_id, "block": info["id"],
+                                                    "data": {selector: {attribute: filled}}})
 
-        # %%TITLE%% и %%IMAGE%% — в обычных текстовых блоках, их видно в содержимом блока
-        for info in infos:
-            block_id, content = info["id"], info["content"]
+        # %%TITLE%% и %%IMAGE%% в обычных текстовых блоках (если они там есть) — их видно в содержимом блока
+        for other in infos:
+            if other["id"] == target[0]["id"]:
+                continue
+            block_id, content = other["id"], other["content"]
             if not any(m in content for m in (MARKERS["title"], MARKERS["image"])) \
                     and "publisher-title" not in content and "publisher-image" not in content:
                 continue
@@ -386,6 +458,18 @@ def publish(news_id: int) -> None:
             fields["ADDITIONAL_FIELDS"] = extra
         call(webhook, "landing.landing.update", {"lid": page_id, "fields": fields})
         call(webhook, "landing.landing.publication", {"lid": page_id})
+        if _markers_left(webhook, page_id):
+            # Портал не принял запись в поле блока — пробуем записать код через содержимое блока
+            _write_by_content(webhook, page_id, target[0], selector, attribute, filled)
+            call(webhook, "landing.landing.publication", {"lid": page_id})
+            if _markers_left(webhook, page_id):
+                try:  # не оставляем на сайте страницу с метками вместо статьи
+                    call(webhook, "landing.landing.unpublic", {"lid": page_id})
+                except BitrixError:
+                    pass
+                raise BitrixError("Битрикс24 не принял новый код HTML-блока — страница снята с публикации, "
+                                  "чтобы на сайте не висели метки %%…%%. Нажмите «Настройки» → «Битрикс24» → «Проверить шаблон», "
+                                  "скопируйте подробный отчёт и пришлите разработчику.")
         url = call(webhook, "landing.landing.getpublicurl", {"lid": page_id})
         if isinstance(url, dict):
             url = url.get(str(page_id)) or next(iter(url.values()), "")

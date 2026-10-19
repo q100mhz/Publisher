@@ -69,7 +69,7 @@ def check(request: Request, user_id: int = Depends(require_user), db: Session = 
 @router.post("/settings/bitrix")
 def save(request: Request, webhook: str = Form(""), site_id: str = Form(""), template_id: str = Form(""),
          site_title: str = Form(""), template_title: str = Form(""), mark_published: str = Form(""),
-         remove: str = Form(""), user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+         image_place: str = Form("after_h1"), remove: str = Form(""), user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     _allowed(request)
     if remove:
         for key in ("bitrix_webhook", "bitrix_site_id", "bitrix_template_id", "bitrix_site_title", "bitrix_template_title"):
@@ -90,6 +90,8 @@ def save(request: Request, webhook: str = Form(""), site_id: str = Form(""), tem
         set_setting(db, user_id, "bitrix_template_id", template_id)
         set_setting(db, user_id, "bitrix_template_title", template_title.strip()[:200])
     set_setting(db, user_id, "bitrix_mark_published", "1" if mark_published else "0")
+    if image_place in bitrix.IMAGE_PLACES:
+        set_setting(db, user_id, "bitrix_image_place", image_place)
     db.commit()
     flash(request, "Настройки Битрикс24 сохранены")
     return redirect("/settings#bitrix")

@@ -24,19 +24,6 @@
           <label for="title">Заголовок новости</label>
           <textarea id="title" class="title-input" name="title" rows="2" style="min-height:0" required>{{ news.title }}</textarea>
         </div>
-        <div class="field">
-          <label for="new_title">Изменённый заголовок</label>
-          <textarea id="new_title" class="title-input new-title" name="new_title" rows="2" style="min-height:0" data-new-title
-                    placeholder="Появится после генерации статьи или по кнопке ниже">{{ news.new_title or '' }}</textarea>
-          <div class="title-gen">
-            <select data-title-prompt aria-label="Промпт для заголовка">
-              {% for p in title_prompts %}<option value="{{ p.id }}">{{ p.name }}{{ ' (основной)' if p.is_default }}</option>{% endfor %}
-            </select>
-            <button type="button" class="btn-sm" data-generate-title data-url="{{ url('/news/' ~ news.id ~ '/generate-title') }}"
-                    {{ 'disabled' if ai_error or not title_prompts }}>✦ Сгенерировать заголовок</button>
-            <button type="button" class="btn-sm btn-ghost" data-copy-from="[data-new-title]">⧉ Скопировать</button>
-          </div>
-        </div>
         <div class="field-row">
           <div class="field">
             <label for="created_at">Дата создания</label>

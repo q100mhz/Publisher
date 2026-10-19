@@ -103,7 +103,49 @@ def user_settings(db, user: User) -> dict:
         "site_title": get_setting(db, user.id, "bitrix_site_title", ""),
         "template_title": get_setting(db, user.id, "bitrix_template_title", ""),
         "mark_published": get_setting(db, user.id, "bitrix_mark_published", "1") == "1",
+        "image_place": get_setting(db, user.id, "bitrix_image_place", "after_h1"),
     }
+
+
+# Куда ставить картинку, если в шаблоне нет метки %%IMAGE%%
+IMAGE_PLACES = {
+    "after_h1": "После заголовка статьи",
+    "top": "В самом начале статьи",
+    "bottom": "В конце статьи",
+    "none": "Не добавлять картинку",
+}
+
+
+def _place_image(article: str, image_html: str, place: str) -> str:
+    """Вставляет картинку в текст статьи — для шаблона с одной меткой %%ARTICLE%%."""
+    if not image_html or place == "none":
+        return article
+    if place == "bottom":
+        return article + "\n" + image_html
+    soup = BeautifulSoup(article, "html.parser")
+    figure = BeautifulSoup(image_html, "html.parser")
+    h1 = soup.find("h1") if place == "after_h1" else None
+    if h1 is not None:
+        anchor = h1
+        # Заголовок внутри «шапки» статьи (<header>, .hero) — картинку ставим после всей шапки
+        parent = h1.parent
+        if parent is not None and parent.name != "[document]" and (
+                parent.name == "header" or "hero" in (parent.get("class") or [])):
+            anchor = parent
+        anchor.insert_after(figure)
+        return str(soup)
+    # Нет заголовка или выбрано «в начале» — в начало статьи (внутрь общей обёртки, если она одна)
+    roots = [n for n in soup.contents if getattr(n, "name", None)]
+    if len(roots) == 1 and roots[0].name in ("div", "article", "section", "main"):
+        roots[0].insert(0, figure)
+        return str(soup)
+    return image_html + "\n" + article
+
+
+def _image_html(src: str, title: str) -> str:
+    return (f'<figure class="publisher-image" style="margin:0 0 24px">'
+            f'<img src="{html_lib.escape(src, quote=True)}" alt="{html_lib.escape(title, quote=True)}" '
+            f'style="display:block;max-width:100%;height:auto;margin:0 auto;border-radius:16px"></figure>')
 
 
 def ready(db, user: User) -> str:
@@ -475,7 +517,7 @@ def publish(news_id: int) -> None:
             cfg = user_settings(db, user)
             webhook = cfg["webhook"]
             site_id, template_id = int(cfg["site_id"]), int(cfg["template_id"])
-            title = (news.new_title or news.title).strip()
+            image_place = cfg["image_place"]
             prepared = prepare_article(news.html_code, news.meta_html)
             if prepared["cleaned"]:
                 # Служебную часть из текста статьи переносим в META, чтобы в карточке было то же, что на сайте
@@ -484,6 +526,8 @@ def publish(news_id: int) -> None:
                     db.add(NewsHistory(news_id=news_id, action="Служебная часть ответа нейросети (Meta, анализ, "
                                                                "описание картинки) перенесена из текста статьи в META"))
             article, css, seo = prepared["article"], prepared["css"], prepared["seo"]
+            # Заголовок страницы — <h1> статьи (его пишет нейросеть в основной генерации)
+            title = (generator.article_heading(article, news.meta_html) or news.new_title or news.title).strip()
             image = news.cover_image
             page_id = news.bitrix_page_id
             user_id = user.id
@@ -520,10 +564,17 @@ def publish(news_id: int) -> None:
         index = [i["id"] for i in infos].index(info["id"])
         code = (_template_code(webhook, template_id, index, selector, attribute, page_id)
                 or saved.get("code") or MARKERS["article"])
-        image_html = ""
-        if MARKERS["image"] in code and image:
-            src = _upload_image(webhook, info["id"], image)
-            image_html = f'<img src="{src}" alt="{html_lib.escape(title)}">' if src else ""
+        # Картинка: по метке %%IMAGE%%, а если меток нет нигде в шаблоне — прямо в текст статьи
+        has_marker = MARKERS["image"] in code or any(
+            MARKERS["image"] in (o["content"] or "") or "publisher-image" in (o["content"] or "")
+            for o in infos if o["id"] != info["id"])
+        image_html, image_src = "", ""
+        if image and (MARKERS["image"] in code or (not has_marker and image_place != "none")):
+            image_src = _upload_image(webhook, info["id"], image)
+        if image_src and MARKERS["image"] in code:
+            image_html = f'<img src="{html_lib.escape(image_src, quote=True)}" alt="{html_lib.escape(title, quote=True)}">'
+        elif image_src:
+            article = _place_image(article, _image_html(image_src, title), image_place)
         filled = _fill_code(code, article + ("\n" + seo["comment"] if seo["comment"] else ""), title, image_html)
 
         # %%TITLE%% и %%IMAGE%% в обычных текстовых блоках (если они там есть) — их видно в содержимом блока
@@ -539,7 +590,9 @@ def publish(news_id: int) -> None:
                 image_html = ""  # картинки нет — метку просто убираем
                 if image:
                     src = _upload_image(webhook, block_id, image)
-                    image_html = f'<img src="{src}" alt="{title}">' if src else ""
+                    image_src = image_src or src
+                    image_html = (f'<img src="{html_lib.escape(src, quote=True)}" '
+                                  f'alt="{html_lib.escape(title, quote=True)}">') if src else ""
             new_content, changed = _fill(content, {"article": None, "title": title, "image": image_html})
             if changed:
                 call(webhook, "landing.block.updatecontent", {"lid": page_id, "block": block_id, "content": new_content})
@@ -549,7 +602,7 @@ def publish(news_id: int) -> None:
             fields["CODE"] = slugify(title)
         extra = {k: v for k, v in {"METAMAIN_TITLE": seo["title"] or title, "METAMAIN_DESCRIPTION": seo["description"],
                                     "METAMAIN_KEYWORDS": seo["keywords"], "METAOG_TITLE": seo["title"] or title,
-                                    "METAOG_DESCRIPTION": seo["description"]}.items() if v}
+                                    "METAOG_DESCRIPTION": seo["description"], "METAOG_IMAGE": image_src}.items() if v}
         extra["METAMAIN_USE"] = "Y"
         current_css = ""
         try:

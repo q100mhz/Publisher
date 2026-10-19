@@ -74,6 +74,12 @@ def run() -> None:
         for table in OWNED_TABLES:
             conn.execute(text(f"CREATE INDEX IF NOT EXISTS ix_{table}_user_id ON {table} (user_id)"))
 
+        # Отдельной генерации заголовка больше нет — заголовок приходит из основной генерации статьи
+        if "prompts" in tables and "kind" in {c["name"] for c in insp.get_columns("prompts")}:
+            removed = conn.execute(text("DELETE FROM prompts WHERE kind = 'title'")).rowcount
+            if removed:
+                print(f"[migrate] удалены промпты для заголовка: {removed}")
+
         # Ключи API теперь хранятся отдельно для каждой нейросети: ai_api_key → ai_api_key:<сервис>
         if "user_settings" in tables:
             for prefix, provider_key, default in (("ai_api_key", "ai_provider", "deepseek"),

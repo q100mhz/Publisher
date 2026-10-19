@@ -14,6 +14,7 @@ from ..security import UnsafeURL, check_url, clean_text
 from ..db import get_db
 from ..models import Prompt, User, get_setting, set_setting
 from ..services import ai, generator
+from ..services import bitrix as bitrix_service
 from ..web import flash, redirect, render
 
 router = APIRouter()
@@ -29,7 +30,7 @@ def _own_prompt(db: Session, prompt_id: int, user_id: int) -> Prompt:
     return prompt
 
 
-PROMPT_KINDS = {"text": "Для статьи", "title": "Для заголовка", "image": "Для картинки"}
+PROMPT_KINDS = {"text": "Для статьи", "image": "Для картинки"}
 
 
 @router.get("/prompts")
@@ -39,7 +40,7 @@ def prompts_page(request: Request, edit: int | None = None, kind: str = "text", 
                          .order_by(Prompt.is_default.desc(), Prompt.name)).all()
     current = _own_prompt(db, edit, user_id) if edit else None
     kind = current.kind if current else (kind if kind in PROMPT_KINDS else "text")
-    placeholders = {"image": generator.IMAGE_PLACEHOLDERS, "title": generator.TITLE_PLACEHOLDERS}.get(
+    placeholders = {"image": generator.IMAGE_PLACEHOLDERS}.get(
         kind, generator.PLACEHOLDERS)
     return render(request, "prompts.html", active="prompts", prompts=prompts, current=current, kind=kind,
                   kinds=PROMPT_KINDS, placeholders=placeholders)
@@ -108,7 +109,8 @@ def settings_page(request: Request, user_id: int = Depends(require_user), db: Se
     return render(request, "settings.html", active="settings", themes=THEMES, providers=ai.PROVIDERS,
                   ai_settings=ai.describe(db, user), ai_status=ai_status,
                   img_providers=ai.IMAGE_PROVIDERS, img_models=ai.IMAGE_MODEL_HINTS, img_sizes=ai.IMAGE_SIZES,
-                  img_settings=ai.describe_images(db, user), img_status=img_status, bitrix=_bitrix_view(db, user))
+                  img_settings=ai.describe_images(db, user), img_status=img_status, bitrix=_bitrix_view(db, user),
+                  image_places=bitrix_service.IMAGE_PLACES)
 
 
 def _bitrix_view(db: Session, user) -> dict | None:

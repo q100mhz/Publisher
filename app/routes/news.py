@@ -122,12 +122,11 @@ def card(request: Request, news_id: int, user_id: int = Depends(require_user), d
     prompts = db.scalars(select(Prompt).where(Prompt.user_id == user_id)
                          .order_by(Prompt.is_default.desc(), Prompt.name)).all()
     image_prompts = [p for p in prompts if p.kind == "image"]
-    title_prompts = [p for p in prompts if p.kind == "title"]
     prompts = [p for p in prompts if p.kind == "text"]
     return render(
         request, "news_card.html", active="registry", news=news, prompts=prompts, max_upload_mb=MAX_UPLOAD_MB,
         statuses=NewsStatus.LABELS, versions=news.versions[:20], history=news.history[:50],
-        ai_error=_ai_error(db, request.state.user), image_prompts=image_prompts, title_prompts=title_prompts,
+        ai_error=_ai_error(db, request.state.user), image_prompts=image_prompts,
         privacy=generator.privacy_report(news),
         bitrix_problem=bitrix.ready(db, request.state.user) if request.state.user.bitrix_allowed else None,
         img_error=_img_error(db, request.state.user),
@@ -142,7 +141,6 @@ def save(
     created_at: str = Form(""),
     original_text: str = Form(""),
     html_code: str = Form(""),
-    new_title: str = Form(""),
     meta_html: str = Form(""),
     planned_publish_date: str = Form(""),
     published_at: str = Form(""),
@@ -156,7 +154,6 @@ def save(
         "created_at": (_parse_datetime(created_at) or news.created_at, "дата создания"),
         "original_text": (clean_text(original_text, LIMITS["text"]), "текст оригинала"),
         "html_code": (clean_text(html_code, LIMITS["html"]), "HTML-код"),
-        "new_title": (clean_text(new_title, 1000).strip() or None, "изменённый заголовок"),
         "meta_html": (clean_text(meta_html, LIMITS["meta"]).strip(), "META"),
         "planned_publish_date": (_parse_date(planned_publish_date), "плановая дата публикации"),
         "published_at": (_parse_date(published_at), "фактическая дата публикации"),
@@ -322,26 +319,6 @@ def generate(request: Request, news_id: int, prompt_id: int = Form(...), user_id
     db.commit()
     executor.submit(generator.generate, news_id, prompt_id)
     return {"ok": True}
-
-
-@router.post("/news/{news_id}/generate-title")
-def generate_title(request: Request, news_id: int, prompt_id: int = Form(...), user_id: int = Depends(require_user),
-                   db: Session = Depends(get_db)):
-    news = _get(db, news_id, user_id)
-    error = _ai_error(db, request.state.user)
-    if error:
-        return JSONResponse({"ok": False, "error": error}, 400)
-    prompt = db.get(Prompt, prompt_id)
-    if not prompt or prompt.user_id != user_id or prompt.kind != "title":
-        return JSONResponse({"ok": False, "error": "Промпт для заголовка не найден"}, 400)
-    if not (news.original_text.strip() or news.title.strip()):
-        return JSONResponse({"ok": False, "error": "Нет текста новости — не из чего делать заголовок"}, 400)
-    db.close()
-    try:
-        title = generator.generate_title(news_id, prompt_id)
-    except ai.AIError as e:
-        return JSONResponse({"ok": False, "error": str(e)}, 400)
-    return {"ok": True, "title": title}
 
 
 @router.post("/news/{news_id}/generate-image")

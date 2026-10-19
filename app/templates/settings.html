@@ -150,6 +150,16 @@
       </div>
       <input type="hidden" name="site_title" value="{{ bitrix.site_title }}" data-bx-site-title>
       <input type="hidden" name="template_title" value="{{ bitrix.template_title }}" data-bx-template-title>
+      <div class="field">
+        <label for="bx-image-place">Картинка статьи</label>
+        <select id="bx-image-place" name="image_place">
+          {% for key, label in image_places.items() %}<option value="{{ key }}" {{ 'selected' if bitrix.image_place == key }}>{{ label }}</option>{% endfor %}
+        </select>
+        <p class="hint">В статью уходит картинка, отмеченная в карточке «★ в статью»: своя, от ИИ или из оригинала.
+          Она загружается на портал и вставляется в текст статьи — отдельный блок в шаблоне не нужен.
+          Если в шаблоне есть метка <code>%%IMAGE%%</code>, картинка встанет на её место. Картинка также уходит
+          в превью для соцсетей и мессенджеров (og:image).</p>
+      </div>
       <label class="check-inline"><input type="checkbox" name="mark_published" value="1" {{ 'checked' if bitrix.mark_published }}> После публикации ставить статус «Опубликована»</label>
       <div class="gen-status hidden" data-bx-status style="margin-top:12px"></div>
       <div class="hidden" data-bx-report style="margin-top:12px"></div>

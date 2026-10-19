@@ -275,26 +275,6 @@
     } catch (err) { toast(err.message, "warn"); }
   }));
 
-  // Новый заголовок отдельным запросом к нейросети
-  const titleBtn = $("[data-generate-title]");
-  if (titleBtn) titleBtn.addEventListener("click", async () => {
-    const privacy = $("[data-generate]")?.dataset.privacy;
-    if (privacy && !confirm(`В статье найдены персональные данные (${privacy}). Перед отправкой в нейросеть они будут удалены. Продолжить?`)) return;
-    const old = titleBtn.innerHTML;
-    titleBtn.disabled = true;
-    titleBtn.innerHTML = '<span class="blob-loader" style="width:14px;height:14px"></span> Придумываю…';
-    try {
-      const res = await post(titleBtn.dataset.url, { prompt_id: $("[data-title-prompt]").value });
-      $("[data-new-title]").value = res.title;
-      toast("Новый заголовок сохранён");
-    } catch (err) {
-      toast(err.message, "warn");
-    } finally {
-      titleBtn.disabled = false;
-      titleBtn.innerHTML = old;
-    }
-  });
-
   const copyBtn = $("[data-copy]");
   if (copyBtn) copyBtn.addEventListener("click", async () => {
     const text = codeArea.value;

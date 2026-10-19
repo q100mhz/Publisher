@@ -63,16 +63,24 @@ def check(request: Request, user_id: int = Depends(require_user), db: Session = 
         report = bitrix.check_template(cfg["webhook"], int(cfg["template_id"]))
     except bitrix.BitrixError as e:
         return JSONResponse({"ok": False, "error": str(e)}, 400)
+    if str(cfg["list_id"]).isdigit():
+        try:
+            report["list"] = bitrix.check_news_list(cfg["webhook"], int(cfg["list_id"]))
+            report["list_ok"] = True
+        except bitrix.BitrixError as e:
+            report["list"], report["list_ok"] = str(e), False
     return report
 
 
 @router.post("/settings/bitrix")
 def save(request: Request, webhook: str = Form(""), site_id: str = Form(""), template_id: str = Form(""),
          site_title: str = Form(""), template_title: str = Form(""), mark_published: str = Form(""),
-         image_place: str = Form("after_h1"), remove: str = Form(""), user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+         image_place: str = Form("after_h1"), list_id: str = Form(""), list_title: str = Form(""),
+         remove: str = Form(""), user_id: int = Depends(require_user), db: Session = Depends(get_db)):
     _allowed(request)
     if remove:
-        for key in ("bitrix_webhook", "bitrix_site_id", "bitrix_template_id", "bitrix_site_title", "bitrix_template_title"):
+        for key in ("bitrix_webhook", "bitrix_site_id", "bitrix_template_id", "bitrix_site_title", "bitrix_template_title",
+                    "bitrix_list_id", "bitrix_list_title"):
             set_setting(db, user_id, key, "")
         db.commit()
         flash(request, "Подключение к Битрикс24 удалено")
@@ -90,6 +98,9 @@ def save(request: Request, webhook: str = Form(""), site_id: str = Form(""), tem
         set_setting(db, user_id, "bitrix_template_id", template_id)
         set_setting(db, user_id, "bitrix_template_title", template_title.strip()[:200])
     set_setting(db, user_id, "bitrix_mark_published", "1" if mark_published else "0")
+    if list_id.isdigit() or list_id == "":
+        set_setting(db, user_id, "bitrix_list_id", list_id)
+        set_setting(db, user_id, "bitrix_list_title", list_title.strip()[:200] if list_id else "")
     if image_place in bitrix.IMAGE_PLACES:
         set_setting(db, user_id, "bitrix_image_place", image_place)
     db.commit()

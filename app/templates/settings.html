@@ -148,6 +148,18 @@
           </select>
         </div>
       </div>
+      <div class="field">
+        <label for="bx_list">Страница со списком новостей</label>
+        <select id="bx_list" name="list_id" data-bx-list>
+          <option value="">— не добавлять в список —</option>
+          {% if bitrix.list_id %}<option value="{{ bitrix.list_id }}" selected>{{ bitrix.list_title or ('Страница ' ~ bitrix.list_id) }}</option>{% endif %}
+        </select>
+        <p class="hint">Например, «Блог». При первой публикации статьи на этой странице появится её карточка — вверху списка:
+          картинка, заголовок, краткое описание и ссылка на статью. Сервис копирует первую карточку блока-списка,
+          поэтому её оформление сохраняется. При обновлении статьи карточка тоже обновляется. Примеры карточек,
+          которые Битрикс24 добавляет в новый блок, удалите на портале вручную.</p>
+      </div>
+      <input type="hidden" name="list_title" value="{{ bitrix.list_title }}" data-bx-list-title>
       <input type="hidden" name="site_title" value="{{ bitrix.site_title }}" data-bx-site-title>
       <input type="hidden" name="template_title" value="{{ bitrix.template_title }}" data-bx-template-title>
       <div class="field">

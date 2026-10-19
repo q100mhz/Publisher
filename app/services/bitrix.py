@@ -20,7 +20,7 @@ import time
 import traceback
 from datetime import date
 
-from urllib.parse import unquote
+from urllib.parse import unquote, urlparse
 
 import httpx
 from bs4 import BeautifulSoup, Comment
@@ -104,6 +104,8 @@ def user_settings(db, user: User) -> dict:
         "template_title": get_setting(db, user.id, "bitrix_template_title", ""),
         "mark_published": get_setting(db, user.id, "bitrix_mark_published", "1") == "1",
         "image_place": get_setting(db, user.id, "bitrix_image_place", "after_h1"),
+        "list_id": get_setting(db, user.id, "bitrix_list_id", ""),
+        "list_title": get_setting(db, user.id, "bitrix_list_title", ""),
     }
 
 
@@ -562,6 +564,135 @@ def _upload_image(webhook: str, block_id: int, image) -> str:
     return str(result or "")
 
 
+# ---------- Карточка статьи на странице со списком новостей ----------
+#
+# На странице-списке (например, «Блог») стоит блок с повторяющимися карточками: картинка, заголовок,
+# текст, ссылка «Читать далее». При первой публикации первая карточка клонируется (landing.block.clonecard),
+# и в неё записываются данные новой статьи (landing.block.updatenodes с номером карточки @0) — так новая
+# статья оказывается вверху списка. При повторной публикации карточка находится по ссылке на статью
+# и обновляется, новая не добавляется.
+
+def _list_block(webhook: str, list_id: int) -> tuple[dict, dict, str]:
+    """(блок, манифест, селектор карточки) — первый блок страницы с карточками, где есть текст и ссылка."""
+    for block in _blocks(webhook, list_id):
+        block_id = int(block.get("id") or block.get("ID"))
+        manifest = call(webhook, "landing.block.getmanifest", {"lid": list_id, "block": block_id,
+                                                                 "params": {"edit_mode": 1}}) or {}
+        cards = manifest.get("cards") if isinstance(manifest, dict) else None
+        nodes = manifest.get("nodes") if isinstance(manifest, dict) else None
+        if not (isinstance(cards, dict) and cards and isinstance(nodes, dict)):
+            continue
+        types = {str((n or {}).get("type", "")).lower() for n in nodes.values() if isinstance(n, dict)}
+        if "text" in types and ("link" in types or "img" in types):
+            return {"id": block_id}, manifest, next(iter(cards))
+    raise BitrixError("На странице со списком новостей не найден блок с карточками новостей (картинка, заголовок, "
+                      "текст, ссылка). Добавьте на эту страницу блок-список статей из каталога блоков Битрикс24.")
+
+
+def _node_roles(manifest: dict) -> dict:
+    """Какой узел карточки — заголовок, текст, картинка, ссылка (по типу и названию из манифеста)."""
+    roles = {"title": None, "text": None, "img": [], "link": []}
+    texts = []
+    for selector, node in manifest.get("nodes", {}).items():
+        if not isinstance(node, dict):
+            continue
+        kind, name = str(node.get("type", "")).lower(), str(node.get("name", "")).lower()
+        if kind == "img":
+            roles["img"].append(selector)
+        elif kind == "link":
+            roles["link"].append(selector)
+        elif kind == "text":
+            texts.append((selector, name))
+    for selector, name in texts:
+        if roles["title"] is None and any(w in name + selector for w in ("заголов", "title", "назван")):
+            roles["title"] = selector
+    for selector, name in texts:
+        if selector != roles["title"] and roles["text"] is None:
+            roles["text"] = selector
+    if roles["title"] is None and texts:
+        roles["title"] = texts[0][0]
+        roles["text"] = next((sel for sel, _ in texts[1:]), None)
+    return roles
+
+
+def _lead(article: str, description: str, limit: int = 220) -> str:
+    """Короткий анонс для карточки: description из META, иначе начало первого абзаца статьи."""
+    text_ = description.strip()
+    if not text_:
+        soup = BeautifulSoup(article or "", "html.parser")
+        for p in soup.find_all("p"):
+            text_ = p.get_text(" ", strip=True)
+            if len(text_) > 40:
+                break
+    if len(text_) > limit:
+        text_ = text_[:limit].rsplit(" ", 1)[0].rstrip(",.;:—- ") + "…"
+    return text_
+
+
+def _find_card(content: str, card_selector: str, url: str) -> int | None:
+    """Номер карточки, которая уже ссылается на статью."""
+    path = urlparse(url).path.rstrip("/")
+    if not path:
+        return None
+    soup = BeautifulSoup(content or "", "html.parser")
+    try:
+        cards = soup.select(card_selector)
+    except Exception:
+        return None
+    for n, card in enumerate(cards):
+        for a in card.find_all("a", href=True):
+            href = urlparse(html_lib.unescape(a["href"])).path.rstrip("/")
+            if href and href == path:
+                return n
+    return None
+
+
+def check_news_list(webhook: str, list_id: int) -> str:
+    """Проверка страницы-списка без изменений: какой блок и какие поля карточки будут заполняться."""
+    block, manifest, card_selector = _list_block(webhook, list_id)
+    content = (call(webhook, "landing.block.getcontent", {"lid": list_id, "block": block["id"], "editMode": 1,
+                                                          "params": {"wrapper_show": False}}) or {}).get("content", "")
+    try:
+        count = len(BeautifulSoup(content, "html.parser").select(card_selector))
+    except Exception:
+        count = 0
+    roles = _node_roles(manifest)
+    parts = [label for label, ok in (("картинка", roles["img"]), ("заголовок", roles["title"]),
+                                     ("текст", roles["text"]), ("ссылка", roles["link"])) if ok]
+    block_name = (manifest.get("block") or {}).get("name", "") if isinstance(manifest.get("block"), dict) else ""
+    return (f"Список новостей: блок «{block_name or block['id']}», карточек сейчас: {count}. "
+            f"В новую карточку запишется: {', '.join(parts) or 'ничего не найдено'}.")
+
+
+def update_news_list(webhook: str, list_id: int, url: str, title: str, lead: str, image) -> str:
+    """Добавляет (или обновляет) карточку статьи на странице-списке и публикует её. Возвращает пояснение."""
+    block, manifest, card_selector = _list_block(webhook, list_id)
+    content = (call(webhook, "landing.block.getcontent", {"lid": list_id, "block": block["id"], "editMode": 1,
+                                                          "params": {"wrapper_show": False}}) or {}).get("content", "")
+    index = _find_card(content, card_selector, url)
+    added = index is None
+    if added:
+        call(webhook, "landing.block.clonecard", {"lid": list_id, "block": block["id"], "selector": f"{card_selector}@0"})
+        index = 0
+    roles = _node_roles(manifest)
+    data = {}
+    if roles["title"]:
+        data[f"{roles['title']}@{index}"] = html_lib.escape(title)
+    if roles["text"]:
+        data[f"{roles['text']}@{index}"] = html_lib.escape(lead)
+    for selector in roles["link"]:
+        data[f"{selector}@{index}"] = {"href": url}  # текст ссылки («Читать далее») остаётся как в карточке
+    if image and roles["img"]:
+        src = _upload_image(webhook, block["id"], image)
+        for selector in roles["img"]:
+            if src:
+                data[f"{selector}@{index}"] = {"src": src, "alt": title}
+    if data:
+        call(webhook, "landing.block.updatenodes", {"lid": list_id, "block": block["id"], "data": data})
+    call(webhook, "landing.landing.publication", {"lid": list_id})
+    return "карточка добавлена в список новостей" if added else "карточка в списке новостей обновлена"
+
+
 def publish(news_id: int) -> None:
     """Фоновая публикация (или обновление) статьи на портале."""
     page_id, published_now, webhook = None, False, ""
@@ -592,6 +723,7 @@ def publish(news_id: int) -> None:
             saved_raw = get_setting(db, user.id, f"bitrix_tpl:{template_id}", "")
             first_time = not news.bitrix_url  # страница ещё ни разу не публиковалась успешно
             mark_published = cfg["mark_published"]
+            list_id = int(cfg["list_id"]) if str(cfg["list_id"]).isdigit() else 0
             if not article.strip():
                 raise BitrixError("Нет текста статьи — сначала сгенерируйте или вставьте HTML-код")
 
@@ -734,6 +866,13 @@ def publish(news_id: int) -> None:
         url = call(webhook, "landing.landing.getpublicurl", {"lid": page_id})
         if isinstance(url, dict):
             url = url.get(str(page_id)) or next(iter(url.values()), "")
+
+        # Карточка на странице со списком новостей — ошибка здесь не отменяет публикацию статьи
+        if list_id and url:
+            try:
+                notes.append(update_news_list(webhook, list_id, url, title, _lead(article, seo["description"]), image))
+            except BitrixError as e:
+                notes.append(f"не удалось добавить карточку в список новостей: {e}")
 
         with session_scope() as db:
             news = db.get(News, news_id)

@@ -539,8 +539,15 @@
       tplSel.innerHTML = "<option value=''>загружаю…</option>";
       try {
         const res = await post(bx.dataset.pagesUrl, { site_id: siteSel.value, webhook: $("[data-bx-webhook]").value });
-        tplSel.innerHTML = res.pages.map((p) => `<option value="${p.id}">${escapeHtml(p.title)} (ID ${p.id})</option>`).join("")
-          || "<option value=''>на сайте нет страниц</option>";
+        const options = res.pages.map((p) => `<option value="${p.id}">${escapeHtml(p.title)} (ID ${p.id})</option>`).join("");
+        tplSel.innerHTML = options || "<option value=''>на сайте нет страниц</option>";
+        const listSel = $("[data-bx-list]");
+        if (listSel) {
+          const keep = listSel.value;
+          listSel.innerHTML = "<option value=''>— не добавлять в список —</option>" + options;
+          listSel.value = res.pages.some((p) => String(p.id) === keep) ? keep : "";
+          $("[data-bx-list-title]").value = listSel.value ? listSel.selectedOptions[0].textContent : "";
+        }
         $("[data-bx-template-title]").value = tplSel.selectedOptions[0]?.textContent || "";
         show("Выберите страницу-шаблон и нажмите «Сохранить».", true);
       } catch (err) { show(err.message, false); }
@@ -575,11 +582,17 @@
           await copyText($("[data-bx-report-text]").value);
           e.target.textContent = "✓ Скопировано";
         });
+        if (res.list) {
+          report.insertAdjacentHTML("afterbegin", `<p class="gen-status ${res.list_ok ? "running" : "error"}" style="margin:0 0 10px">${escapeHtml(res.list)}</p>`);
+        }
         report.classList.remove("hidden");
         show(res.ok ? "Шаблон в порядке: блок для статьи найден." : "Блок с меткой %%ARTICLE%% не найден — проверьте шаблон.", res.ok);
       } catch (err) { show(err.message, false); } finally { checkBtn.disabled = false; }
     });
     tplSel.addEventListener("change", () => { $("[data-bx-template-title]").value = tplSel.selectedOptions[0].textContent; });
+    $("[data-bx-list]")?.addEventListener("change", (e) => {
+      $("[data-bx-list-title]").value = e.target.value ? e.target.selectedOptions[0].textContent : "";
+    });
   }
 
   // ---------- Битрикс24: публикация из карточки ----------

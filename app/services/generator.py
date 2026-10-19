@@ -6,7 +6,7 @@ import re
 import traceback
 import warnings
 
-from bs4 import BeautifulSoup, Doctype, MarkupResemblesLocatorWarning
+from bs4 import BeautifulSoup, Comment, Doctype, MarkupResemblesLocatorWarning
 
 from ..db import session_scope
 from ..models import News, NewsHistory, NewsImage, NewsStatus, NewsVersion, Prompt, User, now
@@ -236,7 +236,9 @@ def split_service(html: str) -> tuple[str, dict]:
     """
     html = html or ""
     first_tag = html.find("<")
-    if 0 < first_tag and _visible_len(html[:first_tag]) < MIN_ARTICLE_CHARS:
+    if 0 < first_tag and looks_like_css(html[:first_tag]):
+        html = f"<style>\n{html[:first_tag].strip()}\n</style>\n" + html[first_tag:]  # стили без тега <style>
+    elif 0 < first_tag and _visible_len(html[:first_tag]) < MIN_ARTICLE_CHARS:
         html = html[first_tag:]  # «### 1. Статья», «Вот статья:» перед HTML
     for m in SERVICE_START.finditer(html):
         start = m.start() + (1 if m.group(0)[:1] in "\n>" else 0)
@@ -342,14 +344,47 @@ def generate_title(news_id: int, prompt_id: int) -> str:
     return title
 
 
+CSS_FENCE = re.compile(r"```\s*css\s*\n(.*?)```", re.S | re.I)
+CSS_RULE = re.compile(r"[#.:\w\-\[\]=\"' >*,()]+\{[^{}]*:[^{}]*\}")
+
+
 def clean_html(answer: str) -> str:
-    answer = answer.strip()
-    fenced = re.search(r"```(?:html)?\s*\n(.*?)```", answer, re.S | re.I)
-    if fenced:
-        answer = fenced.group(1).strip()
-    # Оставшиеся обрывки разметки markdown (```json, ```) в HTML не нужны
+    """Убирает обёртку markdown из ответа нейросети. Стили из блоков ```css превращаются в <style>,
+    чтобы они не попадали в статью обычным текстом."""
+    answer = CSS_FENCE.sub(lambda m: f"<style>\n{m.group(1).strip()}\n</style>", (answer or "").strip())
     answer = re.sub(r"^\s*```[a-zA-Z]*\s*$", "", answer, flags=re.M)
     return answer.replace("```", "").strip()
+
+
+def looks_like_css(text_: str) -> bool:
+    """Текст целиком состоит из CSS-правил (стили, вставленные в статью без тега <style>)."""
+    text_ = (text_ or "").strip()
+    if text_.count("{") < 1 or text_.count("{") != text_.count("}"):
+        return False
+    rules = sum(len(m.group(0)) for m in CSS_RULE.finditer(re.sub(r"@media[^{]*\{", "", text_)))
+    return rules >= 0.6 * len(re.sub(r"@media[^{]*\{|\}\s*$", "", text_).strip() or "x")
+
+
+def extract_css(html: str) -> tuple[str, str]:
+    """Вынимает из статьи все стили: теги <style> и CSS, оказавшийся в тексте (сам по себе или в абзаце).
+    Возвращает (статья без стилей, CSS)."""
+    soup = BeautifulSoup(html or "", "html.parser")
+    css = []
+    for tag in soup.find_all("style"):
+        css.append(tag.get_text())
+        tag.decompose()
+    for node in list(soup.find_all(string=True)):
+        if isinstance(node, (Comment, Doctype)) or node.parent is None or node.parent.name in ("code", "pre"):
+            continue
+        if looks_like_css(str(node)):
+            css.append(str(node))
+            parent = node.parent
+            node.extract()
+            # Абзац, в котором были только стили, тоже убираем
+            if parent is not None and parent.name in ("p", "div", "span") and not parent.get_text(strip=True) \
+                    and not parent.find(True):
+                parent.decompose()
+    return str(soup).strip(), "\n".join(c.strip() for c in css if c.strip())
 
 
 def generate(news_id: int, prompt_id: int) -> None:

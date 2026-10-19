@@ -513,3 +513,7 @@ a.kpi:hover { text-decoration: none; transform: translateY(-2px); }
   .registry .col-hide { display: none; }
   .flashes { left: 16px; right: 16px; max-width: none; }
 }
+
+/* Правка текста в предпросмотре */
+.edit-bar { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin-bottom: 10px; }
+.edit-bar .hint { margin: 0; }

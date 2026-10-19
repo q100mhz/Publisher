@@ -140,17 +140,6 @@ def _seo(meta_html: str) -> dict:
 CSS_START, CSS_END = "/* publisher:start — стили статьи, обновляются сервисом */", "/* publisher:end */"
 
 
-def _split_styles(article: str) -> tuple[str, str]:
-    """Вынимает <style> из статьи: Битрикс24 убирает этот тег из HTML-блока, а текст стилей оставляет
-    на странице. Стили уходят в собственный CSS страницы, где они работают и не видны."""
-    soup = BeautifulSoup(article, "html.parser")
-    css = []
-    for tag in soup.find_all("style"):
-        css.append(tag.get_text())
-        tag.decompose()
-    return str(soup).strip(), "\n".join(c.strip() for c in css if c.strip()).replace("</", "<\\/")
-
-
 def _merge_css(existing: str, css: str) -> str:
     """Свой CSS страницы: стили шаблона сохраняются, стили статьи заменяются между метками."""
     existing = re.sub(re.escape(CSS_START) + r".*?" + re.escape(CSS_END), "", existing or "", flags=re.S).strip()
@@ -159,18 +148,23 @@ def _merge_css(existing: str, css: str) -> str:
 
 
 def prepare_article(html_code: str, meta_html: str) -> dict:
-    """Готовит статью к публикации: отделяет служебную часть ответа нейросети (Meta Title, анализ,
-    ключи, описание картинки) и стили. Возвращает статью, CSS, SEO и очищенные поля новости,
-    если в них что-то поменялось."""
-    article, service = generator.split_service(html_code or "")
+    """Готовит статью к публикации: убирает обрывки markdown, отделяет служебную часть ответа нейросети
+    (Meta Title, анализ, ключи, описание картинки) и стили. Битрикс24 вырезает тег <style> из HTML-блока,
+    а текст стилей оставляет на странице, поэтому CSS уходит в собственный CSS страницы.
+    Возвращает статью, CSS, SEO и очищенные поля новости, если в них что-то поменялось."""
+    original = html_code or ""
+    article, service = generator.split_service(generator.clean_html(original))
     meta = meta_html or ""
     if service:
         extra = generator.service_meta(service, meta)
         meta = "\n".join(p for p in (meta, extra) if p)
-    seo = _seo(meta)
-    article, css = _split_styles(article)
-    cleaned = (generator.split_service(html_code or "")[0], meta) if service else None
-    return {"article": article, "css": css, "seo": seo, "cleaned": cleaned}
+    article, css = generator.extract_css(article)
+    css = css.replace("</", "<\\/")
+    # В карточке оставляем стили в начале статьи — так предпросмотр выглядит как на сайте
+    tidy = (f"<style>\n{css}\n</style>\n" if css else "") + article
+    changed = service or tidy.strip() != original.strip()
+    return {"article": article, "css": css, "seo": _seo(meta), "service": bool(service),
+            "cleaned": (tidy, meta) if changed else None}
 
 
 def _fill(content: str, parts: dict[str, str]) -> tuple[str, bool]:
@@ -481,8 +475,9 @@ def publish(news_id: int) -> None:
             if prepared["cleaned"]:
                 # Служебную часть из текста статьи переносим в META, чтобы в карточке было то же, что на сайте
                 news.html_code, news.meta_html = prepared["cleaned"]
-                db.add(NewsHistory(news_id=news_id, action="Служебная часть ответа нейросети (Meta, анализ, "
-                                                           "описание картинки) перенесена из текста статьи в META"))
+                if prepared["service"]:
+                    db.add(NewsHistory(news_id=news_id, action="Служебная часть ответа нейросети (Meta, анализ, "
+                                                               "описание картинки) перенесена из текста статьи в META"))
             article, css, seo = prepared["article"], prepared["css"], prepared["seo"]
             image = (news.generated_images or news.original_images or [None])[0]
             page_id = news.bitrix_page_id
@@ -561,7 +556,20 @@ def publish(news_id: int) -> None:
             extra["CSSBLOCK_USE"] = "Y"
             extra["CSSBLOCK_CODE"] = _merge_css(current_css, css)
         fields["ADDITIONAL_FIELDS"] = extra
-        call(webhook, "landing.landing.update", {"lid": page_id, "fields": fields})
+        notes = []
+        try:
+            call(webhook, "landing.landing.update", {"lid": page_id, "fields": fields})
+            if css:
+                notes.append("стили статьи — в CSS страницы")
+        except BitrixError as e:
+            # Портал не принял часть дополнительных полей — сохраняем название и основное SEO без них
+            for key in ("CSSBLOCK_USE", "CSSBLOCK_CODE", "METAMAIN_KEYWORDS"):
+                extra.pop(key, None)
+            call(webhook, "landing.landing.update", {"lid": page_id, "fields": fields})
+            if css:
+                notes.append(f"портал не принял CSS страницы ({e}) — оформление статьи не применено")
+        if prepared["service"]:
+            notes.append("служебная часть ответа нейросети на странице скрыта")
 
         # Записываем код HTML-блока, публикуем и проверяем, что меток на сайте не осталось
         tried = []
@@ -594,7 +602,8 @@ def publish(news_id: int) -> None:
             news.bitrix_state, news.bitrix_error, news.bitrix_published_at = "idle", "", now()
             if mark_published and news.status != NewsStatus.PUBLISHED:
                 news.status, news.published_at = NewsStatus.PUBLISHED, date.today()
-            db.add(NewsHistory(news_id=news_id, action=f"Битрикс24: страница {action}" + (f" — {url}" if url else "")))
+            db.add(NewsHistory(news_id=news_id, action=f"Битрикс24: страница {action}" + (f" — {url}" if url else "")
+                                                       + (f" ({'; '.join(notes)})" if notes else "")))
     except Exception as e:
         if not isinstance(e, BitrixError):
             traceback.print_exc()

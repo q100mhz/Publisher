@@ -136,6 +136,7 @@
     const html = codeArea.value.trim();
     $("[data-preview-empty]").classList.toggle("hidden", !!html);
     frame.classList.toggle("hidden", !html);
+    $("[data-edit-bar]")?.classList.toggle("hidden", !html);
     if (!html) return;
     const style = "<style>body{font-family:Georgia,'Times New Roman',serif;font-size:17px;line-height:1.65;color:#222;max-width:760px;margin:24px auto;padding:0 20px}img{max-width:100%;height:auto}h1,h2,h3{font-family:Arial,sans-serif;line-height:1.25}table{border-collapse:collapse}td,th{border:1px solid #ddd;padding:6px 10px}</style>";
     // Блок title/meta из ответа нейросети показываем отдельной плашкой — читатель его не видит, но проверить SEO полезно
@@ -146,8 +147,79 @@
     const seo = title || desc
       ? `<div style="font-family:Arial,sans-serif;font-size:13px;background:#fff6e0;border:1px dashed #e0b44a;border-radius:10px;padding:10px 14px;margin-bottom:22px;color:#5b4500"><b>SEO</b>${title ? `<br><b>title:</b> ${escapeHtml(title)}` : ""}${desc ? `<br><b>description:</b> ${escapeHtml(desc)}` : ""}</div>`
       : "";
-    frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8">${style}</head><body>${seo}${doc.body.innerHTML}</body></html>`;
+    // Стили и прочее, что браузер вынес в <head>, сохраняем — и для вида, и чтобы не потерять их при правке
+    headExtra = [...doc.head.querySelectorAll("style, link")].map((n) => n.outerHTML).join("\n");
+    frame.srcdoc = `<!doctype html><html><head><meta charset="utf-8">${style}${editStyle}${headExtra}</head><body>${seo}<div id="pub-edit-root">${doc.body.innerHTML}</div></body></html>`;
   }
+
+  // ---------- Правка текста прямо в предпросмотре ----------
+  let headExtra = "";
+  let editing = false;
+  const editStyle = "<style>#pub-edit-root[contenteditable=true]{outline:2px dashed #f08a24;outline-offset:10px;border-radius:4px;cursor:text}#pub-edit-root[contenteditable=true]:focus{outline-style:solid}</style>";
+  const editToggle = $("[data-edit-toggle]");
+
+  function editRoot() {
+    try { return frame.contentDocument.getElementById("pub-edit-root"); } catch (_) { return null; }
+  }
+
+  // Переносит правки из предпросмотра в HTML-код статьи
+  function syncFromPreview() {
+    const root = editRoot();
+    if (!editing || !root || !codeArea) return;
+    const html = (headExtra ? headExtra + "\n" : "") + root.innerHTML.trim();
+    if (html !== codeArea.value.trim()) {
+      codeArea.value = html;
+      markDirty();
+    }
+  }
+
+  function markDirty() {
+    dirty = true;
+    const note = $("[data-dirty-note]");
+    if (note) note.innerHTML = "<b style='color:var(--red)'>Есть несохранённые изменения</b>";
+  }
+
+  function fitFrame() {
+    try { frame.style.height = Math.max(420, frame.contentDocument.documentElement.scrollHeight + 20) + "px"; } catch (_) { /* нет доступа */ }
+  }
+
+  function enableEditing() {
+    const root = editRoot();
+    if (!root) return;
+    const doc = frame.contentDocument;
+    root.contentEditable = "true";
+    if (root.dataset.bound) return;
+    root.dataset.bound = "1";
+    let t;
+    root.addEventListener("input", () => { clearTimeout(t); t = setTimeout(() => { syncFromPreview(); fitFrame(); }, 300); });
+    // Вставка из Word и других сайтов — только текстом, без чужих стилей и разметки
+    root.addEventListener("paste", (e) => {
+      e.preventDefault();
+      const text = (e.clipboardData || window.clipboardData).getData("text/plain");
+      doc.execCommand("insertText", false, text);
+    });
+  }
+
+  function setEditing(on) {
+    if (!on) syncFromPreview();
+    editing = on;
+    const root = editRoot();
+    if (root) {
+      if (on) enableEditing(); else root.contentEditable = "false";
+    }
+    if (editToggle) {
+      editToggle.textContent = on ? "✓ Готово" : "✎ Править текст";
+      editToggle.classList.toggle("btn-dark", on);
+    }
+    const hint = $("[data-edit-hint]");
+    if (hint) hint.textContent = on
+      ? "Кликните в текст и правьте. Ctrl+B — жирный, Ctrl+I — курсив, Ctrl+Z — отменить. После правок нажмите «Сохранить»."
+      : "Можно исправить слово, предложение или переписать абзац прямо в статье.";
+    if (on) { try { editRoot()?.focus(); } catch (_) { /* ничего */ } }
+  }
+
+  editToggle?.addEventListener("click", () => setEditing(!editing));
+  newsForm?.addEventListener("submit", syncFromPreview, true);
 
   function escapeHtml(s) {
     return s.replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
@@ -155,10 +227,8 @@
 
   if (frame) {
     frame.addEventListener("load", () => {
-      try {
-        const h = frame.contentDocument.documentElement.scrollHeight;
-        frame.style.height = Math.max(420, h + 20) + "px";
-      } catch (_) { /* нет доступа — оставляем высоту по умолчанию */ }
+      fitFrame();
+      if (editing) enableEditing();
     });
     renderPreview();
     let t;
@@ -168,6 +238,7 @@
 
   // Вкладки «Как увидит читатель» / «HTML-код»
   $$("[data-tab]").forEach((btn) => btn.addEventListener("click", () => {
+    if (btn.dataset.tab !== "preview" && editing) setEditing(false);
     $$("[data-tab]").forEach((b) => b.classList.toggle("on", b === btn));
     $$("[data-pane]").forEach((p) => p.classList.toggle("hidden", p.dataset.pane !== btn.dataset.tab));
     if (btn.dataset.tab === "preview") renderPreview();

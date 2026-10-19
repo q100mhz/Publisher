@@ -103,6 +103,10 @@
         <div class="gen-status error {{ 'hidden' if news.gen_state != 'error' }}" data-gen-error>{{ news.gen_error }}</div>
 
         <div data-pane="preview">
+          <div class="edit-bar {{ 'hidden' if not news.html_code }}" data-edit-bar>
+            <button type="button" class="btn-sm" data-edit-toggle>✎ Править текст</button>
+            <span class="hint" data-edit-hint>Можно исправить слово, предложение или переписать абзац прямо в статье.</span>
+          </div>
           <div class="preview-empty {{ 'hidden' if news.html_code }}" data-preview-empty>Здесь появится статья после генерации. Можно также вставить HTML-код вручную на вкладке «HTML-код».</div>
           <iframe class="preview-frame {{ 'hidden' if not news.html_code }}" data-preview sandbox="allow-same-origin" title="Предпросмотр статьи"></iframe>
         </div>

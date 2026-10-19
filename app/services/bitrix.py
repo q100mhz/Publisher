@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import base64
 import html as html_lib
+import json
 import re
 import time
 import traceback
@@ -163,17 +164,41 @@ def _fill(content: str, parts: dict[str, str]) -> tuple[str, bool]:
 #   3) если HTML-блок на странице один — используем его.
 # Статья записывается методом landing.block.updateattrs в найденный атрибут.
 
+# Служебные ключи манифеста — это не селекторы элементов
+MANIFEST_KEYS = {"attrs", "nodes", "style", "block", "cards", "additional", "items", "menu", "assets", "callbacks",
+                 "lang", "lang_original", "fields", "group", "type", "name", "attribute", "value", "dynamic", "subtype",
+                 "subtype_params", "namespace", "code", "preview", "timestamp", "sections", "manifest", "children", "root"}
+
+
+def _is_html_field(field: dict) -> bool:
+    kind = str(field.get("type", "")).lower()
+    attribute = str(field.get("attribute", "")).lower()
+    name = str(field.get("name", "")).lower()
+    return bool(attribute) and (kind in ("html", "htmlcode", "html-code", "code", "textarea")
+                                or "html" in attribute or "html" in name)
+
+
 def _html_fields(node, selector: str | None = None):
-    """(селектор, атрибут) всех полей типа «html» из манифеста блока."""
+    """(селектор, атрибут) полей «HTML код» из манифеста блока (где бы в манифесте они ни были описаны)."""
     if isinstance(node, dict):
-        if node.get("attribute") and str(node.get("type", "")).lower() == "html" and selector:
+        if selector and _is_html_field(node):
             yield selector, node["attribute"]
         for key, value in node.items():
-            next_selector = key if isinstance(key, str) and key[:1] in ".#[" else selector
-            yield from _html_fields(value, next_selector)
+            is_selector = isinstance(key, str) and key not in MANIFEST_KEYS and not key.isdigit()
+            yield from _html_fields(value, key if is_selector else selector)
     elif isinstance(node, list):
         for item in node:
             yield from _html_fields(item, selector)
+
+
+def _manifest_excerpt(manifest) -> str:
+    """Короткая выжимка манифеста для отчёта «Проверить шаблон»."""
+    if not isinstance(manifest, dict):
+        return json.dumps(manifest, ensure_ascii=False)[:600]
+    part = {k: manifest[k] for k in ("block", "attrs", "nodes", "style", "cards") if k in manifest}
+    if isinstance(part.get("block"), dict):
+        part["block"] = {k: v for k, v in part["block"].items() if k in ("name", "type", "subtype", "subtype_params", "html")}
+    return json.dumps(part or {"keys": list(manifest)[:20]}, ensure_ascii=False)[:1500]
 
 
 def _decoded(value: str) -> str:
@@ -210,7 +235,7 @@ def _block_info(webhook: str, lid: int, block: dict) -> dict:
             elements = []
         values[(selector, attribute)] = "\n".join(_decoded(str(el.get(attribute, ""))) for el in elements)
     return {"id": block_id, "code": block.get("code") or block.get("CODE") or "", "content": content,
-            "fields": fields, "values": values}
+            "fields": fields, "values": values, "manifest": _manifest_excerpt(manifest)}
 
 
 def _find_article_target(webhook: str, page_id: int, template_id: int, infos: list[dict]):
@@ -243,19 +268,43 @@ def describe_blocks(infos: list[dict]) -> str:
 
 
 def check_template(webhook: str, template_id: int) -> dict:
-    """Проверка страницы-шаблона без изменений на портале: где стоят метки."""
+    """Проверка страницы-шаблона без изменений на портале: где стоят метки.
+
+    Кроме таблицы возвращает подробный отчёт (манифест и содержимое HTML-блоков) — по нему видно,
+    как конкретный портал хранит код HTML-блока, если автоматически найти метку не удалось.
+    """
     infos = [_block_info(webhook, template_id, b) for b in _blocks(webhook, template_id)]
     target = _find_article_target(webhook, template_id, template_id, infos)
-    rows = []
+    try:
+        published = _blocks(webhook, template_id, edit=False, content=True)
+    except BitrixError as e:
+        published = []
+        published_error = str(e)
+    else:
+        published_error = "" if published else "опубликованной версии шаблона нет"
+    rows, report = [], [f"Шаблон: страница {template_id}. Блоков: {len(infos)}. "
+                        f"Опубликованная версия: {published_error or f'{len(published)} блоков'}."]
     for n, info in enumerate(infos, 1):
         text = info["content"]
+        public = (published[n - 1].get("content") or "") if n <= len(published) else ""
+        marker_where = [where for where, ok in (
+            ("поле атрибута", any(MARKERS["article"] in v for v in info["values"].values())),
+            ("черновик блока", MARKERS["article"] in text),
+            ("опубликованная версия", MARKERS["article"] in public)) if ok]
         rows.append({
             "n": n, "code": info["code"],
             "html_fields": [f"{sel} [{attr}]" for sel, attr in info["fields"]],
             "article": bool(target and target[0]["id"] == info["id"]),
+            "marker": ", ".join(marker_where),
             "title": MARKERS["title"] in text, "image": MARKERS["image"] in text,
         })
-    return {"ok": bool(target), "blocks": rows}
+        report.append(f"\n--- Блок №{n} (id {info['id']}, код {info['code']}) ---\n"
+                      f"Метка %%ARTICLE%%: {', '.join(marker_where) or 'не найдена'}\n"
+                      f"HTML-поля: {', '.join(rows[-1]['html_fields']) or 'нет'}\n"
+                      f"Манифест: {info['manifest']}\n"
+                      f"Черновик: {text[:400]}\n"
+                      f"Опубликовано: {public[:400] or '—'}")
+    return {"ok": bool(target), "blocks": rows, "report": "\n".join(report)}
 
 
 def _upload_image(webhook: str, block_id: int, image) -> str:
@@ -305,7 +354,8 @@ def publish(news_id: int) -> None:
         target = _find_article_target(webhook, page_id, template_id, infos)
         if not target:
             raise BitrixError("Не удалось определить, в какой блок вставить статью: метка %%ARTICLE%% не найдена. "
-                              "Проверьте шаблон кнопкой «Проверить шаблон» в настройках. Блоки страницы: "
+                              "Нажмите «Настройки» → «Битрикс24» → «Проверить шаблон» и пришлите подробный отчёт. "
+                              "Блоки страницы: "
                               + describe_blocks(infos))
         info, selector, attribute = target
         call(webhook, "landing.block.updateattrs", {"lid": page_id, "block": info["id"], "data": {

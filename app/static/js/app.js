@@ -506,8 +506,17 @@
         const res = await post(checkBtn.dataset.bxCheck);
         const rows = res.blocks.map((b) => `<tr><td>№${b.n}</td><td>${escapeHtml(b.code || "блок")}</td>`
           + `<td class="small">${b.html_fields.length ? escapeHtml(b.html_fields.join(", ")) : "—"}</td>`
-          + `<td>${b.article ? "✅ сюда встанет статья" : ""}${b.title ? " %%TITLE%%" : ""}${b.image ? " %%IMAGE%%" : ""}</td></tr>`).join("");
-        report.innerHTML = `<table class="mini-table wide"><tr><th>Блок</th><th>Код</th><th>HTML-поле</th><th>Метки</th></tr>${rows}</table>`;
+          + `<td>${b.article ? "✅ сюда встанет статья" : (b.marker ? `метка найдена (${escapeHtml(b.marker)})` : "")}`
+          + `${b.title ? " %%TITLE%%" : ""}${b.image ? " %%IMAGE%%" : ""}</td></tr>`).join("");
+        report.innerHTML = `<table class="mini-table wide"><tr><th>Блок</th><th>Код</th><th>HTML-поле</th><th>Метки</th></tr>${rows}</table>`
+          + `<details class="fold" ${res.ok ? "" : "open"} style="margin-top:10px"><summary class="small">Подробный отчёт для разработчика</summary>`
+          + `<textarea class="code" readonly data-bx-report-text style="min-height:220px;margin-top:8px"></textarea>`
+          + `<button type="button" class="btn-sm btn-dark" data-copy-from="[data-bx-report-text]" style="margin-top:8px">⧉ Скопировать отчёт</button></details>`;
+        $("[data-bx-report-text]").value = res.report || "";
+        $("[data-bx-report] [data-copy-from]").addEventListener("click", async (e) => {
+          await copyText($("[data-bx-report-text]").value);
+          e.target.textContent = "✓ Скопировано";
+        });
         report.classList.remove("hidden");
         show(res.ok ? "Шаблон в порядке: блок для статьи найден." : "Блок с меткой %%ARTICLE%% не найден — проверьте шаблон.", res.ok);
       } catch (err) { show(err.message, false); } finally { checkBtn.disabled = false; }

@@ -186,8 +186,21 @@ def _merge_css(existing: str, css: str) -> str:
     """Поле «Свой CSS» страницы Битрикс24 выводит как есть, поэтому стили статьи обёрнуты в <style>:
     без тега браузер показывает CSS обычным текстом. Стили шаблона сохраняются, стили статьи
     заменяются между метками (в том числе старая запись без <style>)."""
+    existing = existing or ""
+    if "&lt;" in existing and "<" not in existing:
+        existing = html_lib.unescape(existing)
+    # Битрикс24 хранит тег <style> в этом поле в виде «<st yle>» — возвращаем нормальный вид
+    existing = re.sub(r"<(/?)\s*st\s+yle", r"<\1style", existing, flags=re.I)
     ours = r"(?:<style[^>]*>\s*)?" + re.escape(CSS_START) + r".*?" + re.escape(CSS_END) + r"(?:\s*</style>)?"
-    existing = re.sub(ours, "", existing or "", flags=re.S).strip()
+    existing = re.sub(ours, "", existing, flags=re.S)
+    # Пустые обёртки и непарные теги, оставшиеся от прошлых публикаций
+    previous = None
+    while previous != existing:
+        previous = existing
+        existing = re.sub(r"<style[^>]*>\s*</style>", "", existing, flags=re.I)
+    if "{" not in existing:
+        existing = re.sub(r"</?style[^>]*>", "", existing, flags=re.I)
+    existing = existing.strip()
     if existing and "<style" not in existing.lower() and generator.looks_like_css(existing):
         existing = f"<style>\n{existing}\n</style>"  # CSS шаблона без тега тоже был бы виден текстом
     block = f"<style>\n{CSS_START}\n{css}\n{CSS_END}\n</style>" if css else ""
@@ -344,11 +357,12 @@ def _find_article_target(webhook: str, page_id: int, template_id: int, infos: li
     return None
 
 
-def _code_from_rendered(content: str, selector: str) -> str | None:
+def _code_from_rendered(content: str, selector: str, required: tuple = (MARKERS["article"],)) -> str | None:
     """Код HTML-блока из его отрисованной (опубликованной) версии: внутренность самого глубокого элемента,
-    в котором есть все метки блока. Так из разметки Битрикс24 вынимается ровно то, что вписано в поле «HTML код»."""
+    в котором есть все метки блока. Так из разметки Битрикс24 вынимается ровно то, что вписано в поле «HTML код».
+    required — блок подходит, если в нём есть хотя бы одна из этих меток."""
     present = [m for m in MARKERS.values() if m in content]
-    if MARKERS["article"] not in present:
+    if not any(m in present for m in required):
         return None
     soup = BeautifulSoup(content, "html.parser")
     element = None
@@ -388,6 +402,49 @@ def _template_code(webhook: str, template_id: int, index: int, selector: str, at
             if code:
                 return code
     return None
+
+
+SIDE_MARKERS = (MARKERS["title"], MARKERS["image"])
+
+
+def _side_block_code(webhook: str, template_id: int, page_id: int, index: int, info: dict,
+                     selector: str, attribute: str) -> str | None:
+    """Исходный код другого HTML-блока шаблона, если в нём есть %%TITLE%% или %%IMAGE%%.
+    В режиме редактирования Битрикс24 вместо кода HTML-блока отдаёт заглушку, поэтому код ищем
+    в поле блока, в опубликованном шаблоне и в опубликованной копии — по порядковому номеру блока."""
+    raw = info["raw"].get((selector, attribute), "")
+    if any(m in raw for m in SIDE_MARKERS):
+        return raw
+    try:
+        template_blocks = _blocks(webhook, template_id)
+        if index < len(template_blocks):
+            raw = _block_info(webhook, template_id, template_blocks[index])["raw"].get((selector, attribute), "")
+            if any(m in raw for m in SIDE_MARKERS):
+                return raw
+    except BitrixError:
+        pass
+    for lid in dict.fromkeys((template_id, page_id)):
+        try:
+            published = _blocks(webhook, lid, edit=False, content=True)
+        except BitrixError:
+            continue
+        if index < len(published):
+            code = _code_from_rendered(published[index].get("content") or "", selector, SIDE_MARKERS)
+            if code:
+                return code
+    return None
+
+
+def _write_block(webhook: str, page_id: int, info: dict, selector: str, attribute: str, code: str) -> str:
+    """Записывает код HTML-блока первым сработавшим способом. Пустая строка — успех, иначе причина."""
+    tried = []
+    for way, write in _write_attempts(webhook, page_id, info, selector, attribute, code):
+        try:
+            write()
+            return ""
+        except BitrixError as e:
+            tried.append(f"{way}: {e}")
+    return "; ".join(tried)
 
 
 def _fill_code(code: str, article: str, title: str, image_html: str) -> str:
@@ -483,7 +540,8 @@ def check_template(webhook: str, template_id: int) -> dict:
             "html_fields": [f"{sel} [{attr}]" for sel, attr in info["fields"]],
             "article": bool(target and target[0]["id"] == info["id"]),
             "marker": ", ".join(marker_where),
-            "title": MARKERS["title"] in text, "image": MARKERS["image"] in text,
+            "title": any(MARKERS["title"] in t for t in (text, public, *info["values"].values())),
+            "image": any(MARKERS["image"] in t for t in (text, public, *info["values"].values())),
         })
         report.append(f"\n--- Блок №{n} (id {info['id']}, код {info['code']}) ---\n"
                       f"Метка %%ARTICLE%%: {', '.join(marker_where) or 'не найдена'}\n"
@@ -564,22 +622,44 @@ def publish(news_id: int) -> None:
         index = [i["id"] for i in infos].index(info["id"])
         code = (_template_code(webhook, template_id, index, selector, attribute, page_id)
                 or saved.get("code") or MARKERS["article"])
+        # Другие HTML-блоки шаблона с метками %%TITLE%% / %%IMAGE%%
+        saved_side = saved.get("side") or {}
+        side = []  # (номер, блок, селектор, атрибут, исходный код)
+        for idx, other in enumerate(infos):
+            if other["id"] == info["id"] or not other["fields"]:
+                continue
+            sel, attr = other["fields"][0]
+            side_code = (_side_block_code(webhook, template_id, page_id, idx, other, sel, attr)
+                         or saved_side.get(str(idx)))
+            if side_code:
+                side.append((idx, other, sel, attr, side_code))
+
         # Картинка: по метке %%IMAGE%%, а если меток нет нигде в шаблоне — прямо в текст статьи
-        has_marker = MARKERS["image"] in code or any(
+        side_image = any(MARKERS["image"] in c for *_, c in side)
+        has_marker = MARKERS["image"] in code or side_image or any(
             MARKERS["image"] in (o["content"] or "") or "publisher-image" in (o["content"] or "")
             for o in infos if o["id"] != info["id"])
         image_html, image_src = "", ""
-        if image and (MARKERS["image"] in code or (not has_marker and image_place != "none")):
+        if image and (MARKERS["image"] in code or side_image or (not has_marker and image_place != "none")):
             image_src = _upload_image(webhook, info["id"], image)
         if image_src and MARKERS["image"] in code:
             image_html = f'<img src="{html_lib.escape(image_src, quote=True)}" alt="{html_lib.escape(title, quote=True)}">'
-        elif image_src:
+        elif image_src and not has_marker:  # в шаблоне есть своё место для картинки — в текст не дублируем
             article = _place_image(article, _image_html(image_src, title), image_place)
         filled = _fill_code(code, article + ("\n" + seo["comment"] if seo["comment"] else ""), title, image_html)
 
+        img_tag = (f'<img src="{html_lib.escape(image_src, quote=True)}" '
+                   f'alt="{html_lib.escape(title, quote=True)}">') if image_src else ""
+        side_problems = []
+        for idx, other, sel, attr, side_code in side:
+            problem = _write_block(webhook, page_id, other, sel, attr, _fill_code(side_code, "", title, img_tag))
+            if problem:
+                side_problems.append(f"блок №{idx + 1}: {problem}")
+
         # %%TITLE%% и %%IMAGE%% в обычных текстовых блоках (если они там есть) — их видно в содержимом блока
+        side_ids = {other["id"] for _, other, *_ in side}
         for other in infos:
-            if other["id"] == target[0]["id"]:
+            if other["id"] == target[0]["id"] or other["id"] in side_ids:
                 continue
             block_id, content = other["id"], other["content"]
             if not any(m in content for m in (MARKERS["title"], MARKERS["image"])) \
@@ -643,13 +723,14 @@ def publish(news_id: int) -> None:
                 break
             tried.append(f"{way}: портал не применил изменения")
         else:
-            raise BitrixError("Битрикс24 не принял новый код HTML-блока (" + "; ".join(tried) + "). "
+            raise BitrixError("Битрикс24 не принял новый код HTML-блока (" + "; ".join(tried + side_problems) + "). "
                               "Страница снята с публикации, чтобы на сайте не висели метки %%…%%. Нажмите «Настройки» → "
                               "«Битрикс24» → «Проверить шаблон», скопируйте подробный отчёт и пришлите разработчику.")
         # Запоминаем, куда и по какому шаблону вставлялась статья, — для следующих обновлений
         with session_scope() as db:
             set_setting(db, user_id, f"bitrix_tpl:{template_id}", json.dumps(
-                {"index": index, "selector": selector, "attribute": attribute, "code": code}, ensure_ascii=False))
+                {"index": index, "selector": selector, "attribute": attribute, "code": code,
+                 "side": {str(idx): side_code for idx, _, _, _, side_code in side}}, ensure_ascii=False))
         url = call(webhook, "landing.landing.getpublicurl", {"lid": page_id})
         if isinstance(url, dict):
             url = url.get(str(page_id)) or next(iter(url.values()), "")

@@ -13,10 +13,13 @@
 from __future__ import annotations
 
 import base64
+import html as html_lib
 import re
 import time
 import traceback
 from datetime import date
+
+from urllib.parse import unquote
 
 import httpx
 from bs4 import BeautifulSoup
@@ -149,6 +152,112 @@ def _fill(content: str, parts: dict[str, str]) -> tuple[str, bool]:
     return content, changed
 
 
+# ---------- Поиск места для статьи на странице ----------
+#
+# У блока «HTML-код» сам код хранится не в тексте блока, а в атрибуте элемента (тип поля «html»
+# в манифесте блока). В режиме редактирования getcontent вместо кода отдаёт заглушку «HTML-код будет
+# виден только на опубликованной странице», поэтому метку ищем так:
+#   1) по манифесту блока находим его HTML-поле (селектор + имя атрибута) и читаем значение атрибута;
+#   2) если прочитать не удалось — смотрим опубликованную версию шаблона, где код уже отрисован,
+#      и берём блок с меткой по его порядковому номеру;
+#   3) если HTML-блок на странице один — используем его.
+# Статья записывается методом landing.block.updateattrs в найденный атрибут.
+
+def _html_fields(node, selector: str | None = None):
+    """(селектор, атрибут) всех полей типа «html» из манифеста блока."""
+    if isinstance(node, dict):
+        if node.get("attribute") and str(node.get("type", "")).lower() == "html" and selector:
+            yield selector, node["attribute"]
+        for key, value in node.items():
+            next_selector = key if isinstance(key, str) and key[:1] in ".#[" else selector
+            yield from _html_fields(value, next_selector)
+    elif isinstance(node, list):
+        for item in node:
+            yield from _html_fields(item, selector)
+
+
+def _decoded(value: str) -> str:
+    """Значение атрибута во всех вероятных кодировках, склеенное в одну строку для поиска метки."""
+    variants = [value, html_lib.unescape(value), unquote(value), unquote(unquote(value))]
+    if re.fullmatch(r"[A-Za-z0-9+/=\s]{8,}", value or ""):
+        try:
+            variants.append(base64.b64decode(value).decode("utf-8", "ignore"))
+        except ValueError:
+            pass
+    return "\n".join(variants)
+
+
+def _blocks(webhook: str, lid: int, *, edit: bool = True, content: bool = False) -> list[dict]:
+    params = {"edit_mode": 1} if edit else {}
+    if content:
+        params["get_content"] = True
+    return call(webhook, "landing.block.getlist", {"lid": lid, "params": params}) or []
+
+
+def _block_info(webhook: str, lid: int, block: dict) -> dict:
+    block_id = int(block.get("id") or block.get("ID"))
+    manifest = call(webhook, "landing.block.getmanifest", {"lid": lid, "block": block_id, "params": {"edit_mode": 1}}) or {}
+    # wrapper_show=false — HTML самого блока, без служебной обёртки редактора: его можно вернуть в updatecontent
+    content = (call(webhook, "landing.block.getcontent", {"lid": lid, "block": block_id, "editMode": 1,
+                                                           "params": {"wrapper_show": False}}) or {}).get("content", "")
+    fields = list(dict.fromkeys(_html_fields(manifest)))
+    values = {}
+    soup = BeautifulSoup(content, "html.parser")
+    for selector, attribute in fields:
+        try:
+            elements = soup.select(selector)
+        except Exception:  # нестандартный селектор
+            elements = []
+        values[(selector, attribute)] = "\n".join(_decoded(str(el.get(attribute, ""))) for el in elements)
+    return {"id": block_id, "code": block.get("code") or block.get("CODE") or "", "content": content,
+            "fields": fields, "values": values}
+
+
+def _find_article_target(webhook: str, page_id: int, template_id: int, infos: list[dict]):
+    """(блок, селектор, атрибут), куда вставлять статью, или None."""
+    for info in infos:
+        for field, value in info["values"].items():
+            if MARKERS["article"] in value or "publisher-article" in value:
+                return info, *field
+    # Значение атрибута не читается — ищем метку в опубликованной версии шаблона, где код отрисован
+    try:
+        published = _blocks(webhook, template_id, edit=False, content=True)
+    except BitrixError:
+        published = []
+    for index, block in enumerate(published):
+        if MARKERS["article"] in (block.get("content") or "") and index < len(infos) and infos[index]["fields"]:
+            return infos[index], *infos[index]["fields"][0]
+    html_blocks = [info for info in infos if info["fields"]]
+    if len(html_blocks) == 1:
+        return html_blocks[0], *html_blocks[0]["fields"][0]
+    return None
+
+
+def describe_blocks(infos: list[dict]) -> str:
+    parts = []
+    for n, info in enumerate(infos, 1):
+        fields = ", ".join(f"{sel} [{attr}]" for sel, attr in info["fields"]) or "нет HTML-поля"
+        found = any(MARKERS["article"] in v for v in info["values"].values()) or MARKERS["article"] in info["content"]
+        parts.append(f"№{n} {info['code'] or 'блок'} — {fields}{' — метка найдена' if found else ''}")
+    return "; ".join(parts)
+
+
+def check_template(webhook: str, template_id: int) -> dict:
+    """Проверка страницы-шаблона без изменений на портале: где стоят метки."""
+    infos = [_block_info(webhook, template_id, b) for b in _blocks(webhook, template_id)]
+    target = _find_article_target(webhook, template_id, template_id, infos)
+    rows = []
+    for n, info in enumerate(infos, 1):
+        text = info["content"]
+        rows.append({
+            "n": n, "code": info["code"],
+            "html_fields": [f"{sel} [{attr}]" for sel, attr in info["fields"]],
+            "article": bool(target and target[0]["id"] == info["id"]),
+            "title": MARKERS["title"] in text, "image": MARKERS["image"] in text,
+        })
+    return {"ok": bool(target), "blocks": rows}
+
+
 def _upload_image(webhook: str, block_id: int, image) -> str:
     """Загружает картинку в блок портала и возвращает её адрес на портале."""
     data = (MEDIA_DIR / image.filename).read_bytes()
@@ -176,27 +285,37 @@ def publish(news_id: int) -> None:
             meta_title, meta_desc = _seo(news.meta_html)
             image = (news.generated_images or news.original_images or [None])[0]
             page_id = news.bitrix_page_id
+            first_time = not news.bitrix_url  # страница ещё ни разу не публиковалась успешно
             mark_published = cfg["mark_published"]
             if not article.strip():
                 raise BitrixError("Нет текста статьи — сначала сгенерируйте или вставьте HTML-код")
 
-        if page_id:
-            action = "обновлена"
-        else:
+        action = "опубликована" if first_time else "обновлена"
+        if not page_id:
             folder_id = next((p["folder_id"] for p in list_pages(webhook, site_id) if p["id"] == template_id), None)
             params = {"lid": template_id, "toSiteId": site_id}
             if folder_id:
                 params["toFolderId"] = int(folder_id)
             page_id = int(call(webhook, "landing.landing.copy", params))
-            action = "опубликована"
+            # Сразу запоминаем копию: при ошибке ниже повторная попытка возьмёт её, а не создаст ещё одну
+            with session_scope() as db:
+                db.get(News, news_id).bitrix_page_id = page_id
 
-        blocks = call(webhook, "landing.block.getlist", {"lid": page_id, "params": {"edit_mode": 1}}) or []
-        inserted = False
-        for block in blocks:
-            block_id = int(block.get("id") or block.get("ID"))
-            content = (call(webhook, "landing.block.getcontent",
-                            {"lid": page_id, "block": block_id, "editMode": 1}) or {}).get("content", "")
-            if not any(m in content for m in MARKERS.values()) and "publisher-" not in content:
+        infos = [_block_info(webhook, page_id, b) for b in _blocks(webhook, page_id)]
+        target = _find_article_target(webhook, page_id, template_id, infos)
+        if not target:
+            raise BitrixError("Не удалось определить, в какой блок вставить статью: метка %%ARTICLE%% не найдена. "
+                              "Проверьте шаблон кнопкой «Проверить шаблон» в настройках. Блоки страницы: "
+                              + describe_blocks(infos))
+        info, selector, attribute = target
+        call(webhook, "landing.block.updateattrs", {"lid": page_id, "block": info["id"], "data": {
+            selector: {attribute: f'<div class="publisher-article">{article}</div>'}}})
+
+        # %%TITLE%% и %%IMAGE%% — в обычных текстовых блоках, их видно в содержимом блока
+        for info in infos:
+            block_id, content = info["id"], info["content"]
+            if not any(m in content for m in (MARKERS["title"], MARKERS["image"])) \
+                    and "publisher-title" not in content and "publisher-image" not in content:
                 continue
             image_html = None
             if MARKERS["image"] in content or "publisher-image" in content:
@@ -204,16 +323,12 @@ def publish(news_id: int) -> None:
                 if image:
                     src = _upload_image(webhook, block_id, image)
                     image_html = f'<img src="{src}" alt="{title}">' if src else ""
-            new_content, changed = _fill(content, {"article": article, "title": title, "image": image_html})
+            new_content, changed = _fill(content, {"article": None, "title": title, "image": image_html})
             if changed:
                 call(webhook, "landing.block.updatecontent", {"lid": page_id, "block": block_id, "content": new_content})
-                inserted = inserted or "publisher-article" in new_content
-        if not inserted:
-            raise BitrixError("На странице-шаблоне не найдена метка %%ARTICLE%%. Добавьте в шаблон блок "
-                              "«HTML-код» и впишите в него %%ARTICLE%%")
 
         fields = {"TITLE": title[:255]}
-        if action == "опубликована":
+        if first_time:
             fields["CODE"] = slugify(title)
         extra = {k: v for k, v in {"METAMAIN_TITLE": meta_title or title, "METAMAIN_DESCRIPTION": meta_desc,
                                     "METAOG_TITLE": meta_title or title, "METAOG_DESCRIPTION": meta_desc}.items() if v}

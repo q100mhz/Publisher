@@ -152,8 +152,10 @@
       <input type="hidden" name="template_title" value="{{ bitrix.template_title }}" data-bx-template-title>
       <label class="check-inline"><input type="checkbox" name="mark_published" value="1" {{ 'checked' if bitrix.mark_published }}> После публикации ставить статус «Опубликована»</label>
       <div class="gen-status hidden" data-bx-status style="margin-top:12px"></div>
+      <div class="hidden" data-bx-report style="margin-top:12px"></div>
       <div style="display:flex;gap:10px;margin-top:14px;flex-wrap:wrap">
         <button type="submit">Сохранить</button>
+        {% if bitrix.template_id %}<button type="button" class="btn-ghost" data-bx-check="{{ url('/settings/bitrix/check') }}">Проверить шаблон</button>{% endif %}
         {% if bitrix.webhook_mask %}<button type="submit" class="btn-ghost" name="remove" value="1" data-confirm="Удалить подключение к Битрикс24?">Отключить</button>{% endif %}
       </div>
     </form>

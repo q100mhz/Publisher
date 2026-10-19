@@ -52,6 +52,20 @@ def pages(request: Request, site_id: int = Form(...), webhook: str = Form(""), u
     return {"ok": True, "pages": items}
 
 
+@router.post("/settings/bitrix/check")
+def check(request: Request, user_id: int = Depends(require_user), db: Session = Depends(get_db)):
+    """Проверка страницы-шаблона (только чтение — на портале ничего не меняется)."""
+    _allowed(request)
+    cfg = bitrix.user_settings(db, request.state.user)
+    if not (cfg["webhook"] and cfg["template_id"]):
+        return JSONResponse({"ok": False, "error": "Сначала сохраните вебхук, сайт и страницу-шаблон"}, 400)
+    try:
+        report = bitrix.check_template(cfg["webhook"], int(cfg["template_id"]))
+    except bitrix.BitrixError as e:
+        return JSONResponse({"ok": False, "error": str(e)}, 400)
+    return report
+
+
 @router.post("/settings/bitrix")
 def save(request: Request, webhook: str = Form(""), site_id: str = Form(""), template_id: str = Form(""),
          site_title: str = Form(""), template_title: str = Form(""), mark_published: str = Form(""),

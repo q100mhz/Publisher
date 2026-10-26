@@ -92,6 +92,20 @@ def list_pages(webhook: str, site_id: int) -> list[dict]:
             for p in (result or [])]
 
 
+def get_page(webhook: str, page_id: int) -> dict | None:
+    """Страница портала по номеру (или None, если на этом портале её нет). Ищем фильтром по ID, а не
+    в общем списке: список Битрикс24 отдаёт порциями по 50 страниц."""
+    result = call(webhook, "landing.landing.getList", {"params": {
+        "select": ["ID", "TITLE", "SITE_ID", "FOLDER_ID"], "filter": {"ID": int(page_id)}}})
+    page = next((p for p in (result or []) if str(p.get("ID")) == str(page_id)), None)
+    return page
+
+
+def _tpl_key(webhook: str, template_id: int) -> str:
+    """Ключ запомненного кода шаблона — отдельно для каждого портала (номера страниц на порталах повторяются)."""
+    return f"bitrix_tpl:{urlparse(webhook).hostname or ''}:{template_id}"
+
+
 def user_settings(db, user: User) -> dict:
     encrypted = get_setting(db, user.id, "bitrix_webhook", "")
     webhook = decrypt(encrypted) if encrypted else ""
@@ -569,8 +583,8 @@ def _upload_image(webhook: str, block_id: int, image) -> str:
 # На странице-списке (например, «Блог») стоит блок с повторяющимися карточками: картинка, заголовок,
 # текст, ссылка «Читать далее». При первой публикации первая карточка клонируется (landing.block.clonecard),
 # и в неё записываются данные новой статьи (landing.block.updatenodes с номером карточки @0) — так новая
-# статья оказывается вверху списка. При повторной публикации карточка находится по ссылке на статью
-# и обновляется, новая не добавляется.
+# статья оказывается первой: вверху списка, а в сетке — вверху слева. Заголовок карточки становится ссылкой
+# на статью. При повторной публикации карточка находится по ссылке на статью и обновляется, новая не добавляется.
 
 def _list_block(webhook: str, list_id: int) -> tuple[dict, dict, str]:
     """(блок, манифест, селектор карточки) — первый блок страницы с карточками, где есть текст и ссылка."""
@@ -677,7 +691,10 @@ def update_news_list(webhook: str, list_id: int, url: str, title: str, lead: str
     roles = _node_roles(manifest)
     data = {}
     if roles["title"]:
-        data[f"{roles['title']}@{index}"] = html_lib.escape(title)
+        # Заголовок карточки — ссылка на статью (вид заголовка не меняется: цвет и оформление наследуются)
+        data[f"{roles['title']}@{index}"] = (
+            f'<a href="{html_lib.escape(url, quote=True)}" style="color:inherit;text-decoration:inherit">'
+            f'{html_lib.escape(title)}</a>')
     if roles["text"]:
         data[f"{roles['text']}@{index}"] = html_lib.escape(lead)
     for selector in roles["link"]:
@@ -720,17 +737,33 @@ def publish(news_id: int) -> None:
             image = news.cover_image
             page_id = news.bitrix_page_id
             user_id = user.id
-            saved_raw = get_setting(db, user.id, f"bitrix_tpl:{template_id}", "")
+            saved_raw = get_setting(db, user.id, _tpl_key(webhook, template_id), "")
             first_time = not news.bitrix_url  # страница ещё ни разу не публиковалась успешно
             mark_published = cfg["mark_published"]
             list_id = int(cfg["list_id"]) if str(cfg["list_id"]).isdigit() else 0
             if not article.strip():
                 raise BitrixError("Нет текста статьи — сначала сгенерируйте или вставьте HTML-код")
 
+        # Страница, созданная раньше, должна быть на текущем портале и в выбранном сайте. Её нет, если сменили
+        # вебхук (другой портал) или сайт либо удалили страницу на портале, — тогда создаём новую копию шаблона.
+        if page_id:
+            existing = get_page(webhook, page_id)
+            if not existing or str(existing.get("SITE_ID")) != str(site_id):
+                with session_scope() as db:
+                    news = db.get(News, news_id)
+                    news.bitrix_page_id, news.bitrix_url = None, None
+                    db.add(NewsHistory(news_id=news_id, action=f"Битрикс24: прежняя страница (ID {page_id}) не найдена "
+                                                               "на текущем портале и сайте — будет создана новая"))
+                page_id, first_time = None, True
+
         action = "опубликована" if first_time else "обновлена"
         published_now = False
         if not page_id:
-            folder_id = next((p["folder_id"] for p in list_pages(webhook, site_id) if p["id"] == template_id), None)
+            template = get_page(webhook, template_id)
+            if not template:
+                raise BitrixError(f"Страница-шаблон (ID {template_id}) не найдена на портале. Откройте «Настройки» → "
+                                  "«Битрикс24», нажмите «Загрузить сайты» и выберите сайт и шаблон заново.")
+            folder_id = template.get("FOLDER_ID")
             params = {"lid": template_id, "toSiteId": site_id}
             if folder_id:
                 params["toFolderId"] = int(folder_id)
@@ -860,7 +893,7 @@ def publish(news_id: int) -> None:
                               "«Битрикс24» → «Проверить шаблон», скопируйте подробный отчёт и пришлите разработчику.")
         # Запоминаем, куда и по какому шаблону вставлялась статья, — для следующих обновлений
         with session_scope() as db:
-            set_setting(db, user_id, f"bitrix_tpl:{template_id}", json.dumps(
+            set_setting(db, user_id, _tpl_key(webhook, template_id), json.dumps(
                 {"index": index, "selector": selector, "attribute": attribute, "code": code,
                  "side": {str(idx): side_code for idx, _, _, _, side_code in side}}, ensure_ascii=False))
         url = call(webhook, "landing.landing.getpublicurl", {"lid": page_id})
